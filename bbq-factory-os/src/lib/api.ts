@@ -25,7 +25,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 export interface DashboardData {
-  cycle_id: number
+  cycle_id: string
   plan_total: number
   plan_done: number
   done_today: number
@@ -36,7 +36,7 @@ export interface DashboardData {
   salary_bonus: number
   days_left: number
   alerts: { text: string; level: 'warning' | 'critical' }[]
-  tasks: { id: number; name: string; stage: string; status: 'done'|'active'|'pending'; fact: number; plan: number }[]
+  tasks: { id: any; name: string; stage: string; status: 'done'|'active'|'pending'; fact: number; plan: number }[]
 }
 
 export interface StockItem {
@@ -81,71 +81,81 @@ export interface SalaryData {
 // ─── DEMO DATA (замінити коментарі на get() виклики) ─────────────────────────
 export const api = {
 
-  dashboard: (): Promise<DashboardData> =>
-    // TODO: return get<DashboardData>('/api/dashboard')
-    Promise.resolve({
-      cycle_id: 12, plan_total: 30, plan_done: 22, done_today: 22,
-      shipped: 18, in_progress: 4, defects: 1,
-      salary_base: 14200, salary_bonus: 2400, days_left: 7,
-      alerts: [{ text: 'Малий залишок: Сталевий лист 2мм — 12 шт', level: 'critical' }],
-      tasks: [
-        { id:1, name:'BBQ Стандарт 60x40',  stage:'Зварювання',  status:'done',    fact:8, plan:8 },
-        { id:2, name:'BBQ Преміум 80x50',   stage:'Шліфування',  status:'active',  fact:4, plan:6 },
-        { id:3, name:'Мангал складний',      stage:'Фарбування',  status:'pending', fact:0, plan:6 },
-      ]
-    }),
+  dashboard: async (): Promise<DashboardData> => {
+    const d = await get<any>('/api/dashboard')
+    return {
+      cycle_id: d.cycle ?? '-',
+      plan_total: d.tasks?.reduce((s: number, t: any) => s + (t.plan ?? 0), 0) ?? 0,
+      plan_done:  d.tasks?.reduce((s: number, t: any) => s + (t.fact ?? 0), 0) ?? 0,
+      done_today: d.done_today ?? 0,
+      shipped: d.shipped_today ?? 0,
+      in_progress: d.in_progress ?? 0,
+      defects: d.defects ?? 0,
+      salary_base: d.salary_cycle ?? 0,
+      salary_bonus: 0,
+      days_left: 0,
+      alerts: d.alerts ?? [],
+      tasks: d.tasks ?? [],
+    }
+  },
 
-  stock: (): Promise<StockItem[]> =>
-    // TODO: return get<StockItem[]>('/api/stock')
-    Promise.resolve([
-      { id:1, sku:'MAT-001', name:'Сталевий лист 2мм',  qty:12,  unit:'шт',  status:'critical', category:'main' },
-      { id:2, sku:'MAT-002', name:'Сталевий лист 3мм',  qty:84,  unit:'шт',  status:'ok',       category:'main' },
-      { id:3, sku:'MAT-010', name:'Термостійка фарба',  qty:8,   unit:'кг',  status:'low',      category:'main' },
-      { id:4, sku:'MAT-021', name:'Болти M8 x 30',      qty:320, unit:'шт',  status:'ok',       category:'main' },
-      { id:5, sku:'MAT-033', name:'Електроди 3мм',      qty:15,  unit:'пач', status:'low',      category:'main' },
-      { id:6, sku:'FIN-001', name:'BBQ Стандарт 60x40', qty:8,   unit:'шт',  status:'ok',       category:'ready' },
-      { id:7, sku:'FIN-002', name:'BBQ Преміум 80x50',  qty:3,   unit:'шт',  status:'low',      category:'ready' },
-      { id:8, sku:'FIN-005', name:'Мангал складний',    qty:11,  unit:'шт',  status:'ok',       category:'ready' },
-    ]),
+  stock: async (): Promise<StockItem[]> => {
+    const data = await get<any[]>('/api/stock');
+    return data.map((item: any, index: number) => ({
+      id: item.item_id || index,
+      sku: String(item.item_id),
+      name: item.name,
+      qty: item.quantity,
+      unit: 'од',
+      status: item.status,
+      category: item.category === 'finished' ? 'ready' : item.category
+    })) as StockItem[];
+  },
 
-  tasks: (): Promise<Task[]> =>
-    // TODO: return get<Task[]>('/api/tasks')
-    Promise.resolve([
-      { id:1, name:'Зварювання корпусів BBQ 60x40', stage:'Зварювання', status:'done',    fact:8, plan:8  },
-      { id:2, name:'Шліфування BBQ Преміум',        stage:'Шліфування', status:'active',  fact:4, plan:6  },
-      { id:3, name:'Фарбування партії',             stage:'Фарбування', status:'pending', fact:0, plan:12 },
-      { id:4, name:'Складання мангалів',            stage:'Складання',  status:'pending', fact:0, plan:5  },
-    ]),
+  tasks: async (): Promise<Task[]> => {
+    const data = await get<any[]>('/api/tasks')
+    return data.map((t: any) => ({
+      id: t.id,
+      name: t.name ?? t.case_sku ?? String(t.id),
+      stage: t.master_name ?? t.stage ?? '-',
+      status: t.status,
+      fact: t.fact ?? 0,
+      plan: t.plan ?? 0,
+    })) as Task[]
+  },
 
-  taskerCards: (): Promise<TaskerCard[]> =>
-    // TODO: return get<TaskerCard[]>('/api/tasker')
-    Promise.resolve([
-      {
-        id:1, title:'Відвантаження замовлення #847',
-        from:'Адмін', created_at:'09:15', status:'new',
-        items:[
-          { id:1, name:'BBQ Стандарт 60x40', qty:3, unit:'шт', checked:true  },
-          { id:2, name:'BBQ Преміум 80x50',  qty:2, unit:'шт', checked:false },
-          { id:3, name:'Мангал складний',    qty:1, unit:'шт', checked:false },
-        ]
-      },
-      {
-        id:2, title:'Прийом матеріалів від постачальника',
-        from:'Адмін', created_at:'вчора 17:40', status:'done',
-        items:[
-          { id:4, name:'Сталевий лист 3мм', qty:50,  unit:'шт', checked:true },
-          { id:5, name:'Болти M8 x 30',     qty:200, unit:'шт', checked:true },
-        ]
-      }
-    ]),
+  taskerCards: async (): Promise<TaskerCard[]> => {
+    const data = await get<any[]>('/api/tasker')
+    return data.map((c: any) => ({
+      id: c.id,
+      title: c.title ?? c.driver_type ?? `Завдання #${c.id}`,
+      from: c.from_name ?? c.from ?? 'Адмін',
+      created_at: c.created_at ?? '',
+      status: c.status === 'в процесі' ? 'progress' : c.status === 'виконано' ? 'done' : 'new',
+      items: (c.items ?? []).map((i: any) => ({
+        id: i.id,
+        name: i.name ?? i.item_id ?? String(i.id),
+        qty: i.qty ?? i.target_qty ?? 0,
+        unit: i.unit ?? 'шт',
+        checked: i.checked ?? i.is_confirmed ?? false,
+      }))
+    })) as TaskerCard[]
+  },
 
-  salary: (): Promise<SalaryData> =>
-    // TODO: return get<SalaryData>('/api/salary')
-    Promise.resolve({
-      total:16600, base:8000, piecework:6200,
-      bonus:2400, penalty:200,
-      plan_pct:73, days_left:7, cycle_id:12
-    }),
+  salary: async (): Promise<SalaryData> => {
+    const d = await get<any>('/api/salary')
+    const total = d.grand_total ?? 0
+    return {
+      total,
+      base: 0,
+      piecework: total,
+      bonus: 0,
+      penalty: 0,
+      plan_pct: 0,
+      days_left: 0,
+      cycle_id: parseInt(d.cycle?.split('-')[0] ?? '0') || 0,
+    }
+  },
 
   confirmTasker: (id: number) =>
     // TODO: return post('/api/tasker/confirm', { id })
