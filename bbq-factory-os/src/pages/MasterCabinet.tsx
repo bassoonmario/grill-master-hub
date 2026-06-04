@@ -5,7 +5,7 @@ import { SectionTitle, StatCard, Spinner, Card } from '@/components/UI'
 import { Plus, Minus, Trash2, TrendingUp, History, Star, AlertCircle, Save } from 'lucide-react'
 
 export function MasterCabinet() {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [tab, setTab] = useState<'plan' | 'stats'>('plan')
   const [data, setData] = useState<MasterDashboard | null>(null)
   const [stats, setStats] = useState<MasterStatPeriod[] | null>(null)
@@ -42,7 +42,11 @@ export function MasterCabinet() {
     }
   }
 
-  useEffect(() => { loadData() }, [user])
+  useEffect(() => { 
+    if (!authLoading) {
+        loadData() 
+    }
+  }, [user, authLoading])
 
   const handleLogWork = async (taskId: number, itemCode: string, newTotal: number, currentCompleted: number) => {
     if (!user) return
