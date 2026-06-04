@@ -106,12 +106,15 @@ class MasterTaskCreate(BaseModel):
     quantity: float
 
 class MasterTaskUpdate(BaseModel):
-    id: int
+    id: Optional[int] = None
     quantity: float
 
 class MasterWorkLogBody(BaseModel):
     master_name: str
     item_code: str
+    quantity: float
+
+class MasterLogUpdate(BaseModel):
     quantity: float
 
 @app.get("/api/auth/users", response_model=List[UserOut])
@@ -246,7 +249,6 @@ async def get_salary():
 async def get_master_dashboard(master_name: str):
     p = await get_pool()
     try:
-        # Potential earnings (total plan * price)
         potential = await p.fetchval("""
             SELECT COALESCE(SUM(t.quantity * p.work_price), 0)
             FROM bot_workshop.master_tasks t
@@ -254,7 +256,6 @@ async def get_master_dashboard(master_name: str):
             WHERE t.master_name = $1 AND t.status != 'виконано'
         """, master_name) or 0
 
-        # Current earnings (completed qty in current cycle * price)
         cycle_start, cycle_end = cycle_date_range()
         current_earn = await p.fetchval("""
             SELECT COALESCE(SUM(l.quantity * p.work_price), 0)
@@ -263,7 +264,6 @@ async def get_master_dashboard(master_name: str):
             WHERE l.master_name = $1 AND l.work_date BETWEEN $2 AND $3
         """, master_name, cycle_start, cycle_end) or 0
 
-        # Master tasks with priority check
         tasks = await p.fetch("""
             SELECT t.id, t.case_sku, t.quantity, COALESCE(t.completed_quantity, 0) as completed,
                    CASE WHEN ic.quantity < ic.min_limit THEN true ELSE false END as is_priority
@@ -283,39 +283,100 @@ async def get_master_dashboard(master_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/master/tasks")
-async def create_or_update_master_task(body: MasterTaskCreate):
+async def create_master_task(body: MasterTaskCreate, background_tasks: BackgroundTasks):
     p = await get_pool()
     try:
-        # Check if task already exists for this master and article
-        existing = await p.fetchrow("""
-            SELECT id FROM bot_workshop.master_tasks 
-            WHERE master_name = $1 AND case_sku = $2 AND status != 'виконано'
-        """, body.master_name, body.case_sku)
+        new_id = await p.fetchval("""
+            INSERT INTO bot_workshop.master_tasks (master_name, case_sku, quantity, status)
+            VALUES ($1, $2, $3, 'in_progress')
+            RETURNING id
+        """, body.master_name, body.case_sku, body.quantity)
         
-        if existing:
-            await p.execute("""
-                UPDATE bot_workshop.master_tasks SET quantity = quantity + $1 
-                WHERE id = $2
-            """, body.quantity, existing['id'])
-            return {"status": "updated", "id": existing['id']}
-        else:
-            new_id = await p.fetchval("""
-                INSERT INTO bot_workshop.master_tasks (master_name, case_sku, quantity, status)
-                VALUES ($1, $2, $3, 'in_progress')
-                RETURNING id
-            """, body.master_name, body.case_sku, body.quantity)
-            return {"status": "created", "id": new_id}
+        recipe = await p.fetch("""
+            SELECT component_id, items_per_case 
+            FROM bot_workshop.recipes_cases 
+            WHERE TRIM(case_sku) ILIKE TRIM($1)
+        """, body.case_sku)
+        
+        for row in recipe:
+            comp_state = await p.fetchrow("""
+                SELECT component_name, quantity, min_threshold, supplier 
+                FROM bot_workshop.cases_components WHERE id = $1
+            """, row['component_id'])
+            
+            if comp_state:
+                current_qty = float(comp_state['quantity'])
+                min_threshold = float(comp_state['min_threshold'] or 0)
+                items_needed = float(row['items_per_case']) * body.quantity
+                
+                if (current_qty - items_needed) < min_threshold:
+                    background_tasks.add_task(
+                        notify_n8n_low_stock,
+                        comp_state['component_name'],
+                        comp_state['supplier'] or "",
+                        current_qty
+                    )
+                    
+        return {"status": "created", "id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/master/tasks/{task_id}")
+async def update_master_task(task_id: int, body: MasterTaskUpdate, background_tasks: BackgroundTasks):
+    p = await get_pool()
+    try:
+        old_task = await p.fetchrow("""
+            SELECT quantity, case_sku 
+            FROM bot_workshop.master_tasks WHERE id = $1
+        """, task_id)
+        
+        if not old_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        old_qty = float(old_task['quantity'])
+        diff = body.quantity - old_qty
+        
+        if diff > 0:
+            recipe = await p.fetch("""
+                SELECT component_id, items_per_case 
+                FROM bot_workshop.recipes_cases 
+                WHERE TRIM(case_sku) ILIKE TRIM($1)
+            """, old_task['case_sku'])
+            
+            for row in recipe:
+                comp_state = await p.fetchrow("""
+                    SELECT component_name, quantity, min_threshold, supplier 
+                    FROM bot_workshop.cases_components WHERE id = $1
+                """, row['component_id'])
+                
+                if comp_state:
+                    current_qty = float(comp_state['quantity'])
+                    min_threshold = float(comp_state['min_threshold'] or 0)
+                    items_needed = float(row['items_per_case']) * diff
+                    
+                    if (current_qty - items_needed) < min_threshold:
+                        background_tasks.add_task(
+                            notify_n8n_low_stock,
+                            comp_state['component_name'],
+                            comp_state['supplier'] or "",
+                            current_qty
+                        )
+                        
+        await p.execute("""
+            UPDATE bot_workshop.master_tasks SET quantity = $1 
+            WHERE id = $2
+        """, body.quantity, task_id)
+        
+        return {"status": "updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/master/tasks/{task_id}")
 async def delete_master_task(task_id: int):
-    """Видалення завдання з повним поверненням сировини за рецептом."""
     p = await get_pool()
     try:
         async with p.acquire() as conn:
             async with conn.transaction():
-                # Отримуємо дані завдання перед видаленням
                 task = await conn.fetchrow("""
                     SELECT case_sku, completed_quantity 
                     FROM bot_workshop.master_tasks WHERE id = $1
@@ -324,7 +385,6 @@ async def delete_master_task(task_id: int):
                 if not task:
                     raise HTTPException(status_code=404, detail="Task not found")
 
-                # Якщо є виконаний факт — повертаємо сировину за рецептом
                 completed = float(task['completed_quantity'] or 0)
                 if completed > 0:
                     recipe = await conn.fetch("""
@@ -334,7 +394,6 @@ async def delete_master_task(task_id: int):
                     """, task['case_sku'])
 
                     for row in recipe:
-                        # Повертаємо: кількість * виконано (від'ємна дельта застосована назад)
                         return_qty = float(row['items_per_case']) * completed
                         await conn.execute("""
                             UPDATE bot_workshop.cases_components 
@@ -343,7 +402,6 @@ async def delete_master_task(task_id: int):
                             WHERE id = $2
                         """, return_qty, row['component_id'])
 
-                    # Також повертаємо залишок готових кейсів
                     await conn.execute("""
                         UPDATE bot_workshop.inventory_cases 
                         SET quantity = GREATEST(0, quantity - $1),
@@ -351,7 +409,6 @@ async def delete_master_task(task_id: int):
                         WHERE item_id = $2
                     """, completed, task['case_sku'])
 
-                # Тепер видаляємо саме завдання
                 await conn.execute("DELETE FROM bot_workshop.master_tasks WHERE id = $1", task_id)
 
         return {"status": "deleted", "returned_components": completed > 0}
@@ -360,60 +417,108 @@ async def delete_master_task(task_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/master/logs")
-async def log_master_work(body: MasterWorkLogBody, background_tasks: BackgroundTasks):
-    """Внесення факту роботи з автоматичним списанням та сповіщеннями n8n."""
+@app.put("/api/master/logs/{log_id}")
+async def update_master_log(log_id: int, body: MasterLogUpdate):
     p = await get_pool()
-    low_stock_alerts = []  # Компоненти, що пройшли нижче ліміту після списання
-    recipe = []
     try:
         async with p.acquire() as conn:
             async with conn.transaction():
-                # 1. Запис у логи (bot_workshop.master_logs)
+                row = await conn.fetchrow("""
+                    SELECT item_code, quantity, master_name 
+                    FROM bot_workshop.master_logs WHERE id = $1
+                """, log_id)
+                
+                if not row:
+                    raise HTTPException(status_code=404, detail="Log not found")
+                
+                old_qty = float(row['quantity'])
+                diff = body.quantity - old_qty
+                item_code = row['item_code']
+                master_name = row['master_name']
+                
+                await conn.execute("""
+                    UPDATE bot_workshop.inventory_cases 
+                    SET quantity = quantity + $1, last_update = CURRENT_TIMESTAMP
+                    WHERE item_id = $2
+                """, diff, item_code)
+                
+                recipe = await conn.fetch("""
+                    SELECT component_id, items_per_case 
+                    FROM bot_workshop.recipes_cases 
+                    WHERE TRIM(case_sku) ILIKE TRIM($1)
+                """, item_code)
+                
+                for r in recipe:
+                    items_needed = float(r['items_per_case']) * diff
+                    await conn.execute("""
+                        UPDATE bot_workshop.cases_components 
+                        SET quantity = quantity - $1, last_updated = CURRENT_TIMESTAMP
+                        WHERE id = $2
+                    """, items_needed, r['component_id'])
+                
+                task = await conn.fetchrow("""
+                    SELECT id, quantity, completed_quantity 
+                    FROM bot_workshop.master_tasks 
+                    WHERE master_name = $1 AND case_sku = $2 AND status != 'виконано'
+                    ORDER BY created_at DESC LIMIT 1
+                """, master_name, item_code)
+                
+                if not task:
+                    task = await conn.fetchrow("""
+                        SELECT id, quantity, completed_quantity 
+                        FROM bot_workshop.master_tasks 
+                        WHERE master_name = $1 AND case_sku = $2
+                        ORDER BY created_at DESC LIMIT 1
+                    """, master_name, item_code)
+                
+                if task:
+                    new_completed = float(task['completed_quantity'] or 0) + diff
+                    new_status = 'виконано' if new_completed >= float(task['quantity']) else 'in_progress'
+                    await conn.execute("""
+                        UPDATE bot_workshop.master_tasks 
+                        SET completed_quantity = $1, status = $2 
+                        WHERE id = $3
+                    """, new_completed, new_status, task['id'])
+                
+                await conn.execute("""
+                    UPDATE bot_workshop.master_logs 
+                    SET quantity = $1 
+                    WHERE id = $2
+                """, body.quantity, log_id)
+                
+        return {"status": "updated", "diff": diff}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in update_master_log: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/logs")
+async def log_master_work(body: MasterWorkLogBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
                 await conn.execute("""
                     INSERT INTO bot_workshop.master_logs (master_name, work_date, item_code, quantity)
                     VALUES ($1, CURRENT_DATE, $2, $3)
                 """, body.master_name, body.item_code, body.quantity)
 
-                # 2. Оновлення плану (bot_workshop.master_tasks)
-                if body.quantity > 0:
-                    tasks = await conn.fetch("""
-                        SELECT id, quantity, completed_quantity FROM bot_workshop.master_tasks 
-                        WHERE master_name = $1 AND case_sku = $2 AND status != 'виконано'
-                        ORDER BY created_at ASC
-                    """, body.master_name, body.item_code)
+                task = await conn.fetchrow("""
+                    SELECT id, quantity, completed_quantity 
+                    FROM bot_workshop.master_tasks 
+                    WHERE master_name = $1 AND case_sku = $2 AND status != 'виконано'
+                    ORDER BY created_at ASC LIMIT 1
+                """, body.master_name, body.item_code)
 
-                    remaining = body.quantity
-                    for t in tasks:
-                        if remaining <= 0: break
-                        needed = t['quantity'] - t['completed_quantity']
-                        if needed > 0:
-                            take = min(remaining, needed)
-                            new_completed = t['completed_quantity'] + take
-                            new_status = 'виконано' if new_completed >= t['quantity'] else 'in_progress'
-                            await conn.execute("""
-                                UPDATE bot_workshop.master_tasks 
-                                SET completed_quantity = $1, status = $2 WHERE id = $3
-                            """, new_completed, new_status, t['id'])
-                            remaining -= take
-                else:
-                    tasks = await conn.fetch("""
-                        SELECT id, completed_quantity FROM bot_workshop.master_tasks 
-                        WHERE master_name = $1 AND case_sku = $2 AND completed_quantity > 0 
-                        ORDER BY created_at DESC
-                    """, body.master_name, body.item_code)
+                if task:
+                    new_completed = float(task['completed_quantity'] or 0) + float(body.quantity)
+                    new_status = 'виконано' if new_completed >= float(task['quantity']) else 'in_progress'
+                    await conn.execute("""
+                        UPDATE bot_workshop.master_tasks 
+                        SET completed_quantity = $1, status = $2 WHERE id = $3
+                    """, new_completed, new_status, task['id'])
 
-                    to_remove = abs(body.quantity)
-                    for t in tasks:
-                        if to_remove <= 0: break
-                        can_remove = min(to_remove, t['completed_quantity'])
-                        await conn.execute("""
-                            UPDATE bot_workshop.master_tasks 
-                            SET completed_quantity = completed_quantity - $1, status = 'in_progress' WHERE id = $2
-                        """, can_remove, t['id'])
-                        to_remove -= can_remove
-
-                # 3. Автоматика складу готових кейсів (bot_workshop.inventory_cases)
                 await conn.execute("""
                     INSERT INTO bot_workshop.inventory_cases (item_id, quantity, last_update)
                     VALUES ($1, $2, CURRENT_TIMESTAMP)
@@ -422,7 +527,6 @@ async def log_master_work(body: MasterWorkLogBody, background_tasks: BackgroundT
                         last_update = CURRENT_TIMESTAMP
                 """, body.item_code, body.quantity)
 
-                # 4. Рецепт: отримуємо компоненти для цього кейсу
                 recipe = await conn.fetch("""
                     SELECT component_id, items_per_case 
                     FROM bot_workshop.recipes_cases 
@@ -433,23 +537,6 @@ async def log_master_work(body: MasterWorkLogBody, background_tasks: BackgroundT
                     comp_id = row['component_id']
                     items_needed = float(row['items_per_case'])
                     total_comp_diff = items_needed * body.quantity
-
-                    # ЗАПОБІЖНИК: перевіряємо залишок ПЕРЕД списанням
-                    # Якщо body.quantity > 0 (списання) і залишку не вистачить — зупиняємо транзакцію
-                    if body.quantity > 0:
-                        current_qty = await conn.fetchval("""
-                            SELECT quantity FROM bot_workshop.cases_components WHERE id = $1
-                        """, comp_id)
-                        if current_qty is not None and (current_qty - total_comp_diff) < 0:
-                            comp_name = await conn.fetchval("""
-                                SELECT component_name FROM bot_workshop.cases_components WHERE id = $1
-                            """, comp_id)
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Недостатньо компонента '{comp_name}': є {current_qty}, потрібно {total_comp_diff:.1f}"
-                            )
-
-                    # Списуємо/повертаємо компонент
                     await conn.execute("""
                         UPDATE bot_workshop.cases_components 
                         SET quantity = quantity - $1,
@@ -457,48 +544,103 @@ async def log_master_work(body: MasterWorkLogBody, background_tasks: BackgroundT
                         WHERE id = $2
                     """, total_comp_diff, comp_id)
 
-                    # Зчитуємо актуальний стан після оновлення для перевірки ліміту
-                    comp_state = await conn.fetchrow("""
-                        SELECT component_name, quantity, min_threshold, supplier 
-                        FROM bot_workshop.cases_components WHERE id = $1
-                    """, comp_id)
-
-                    # Якщо залишок нижче ліміту — додаємо у список для сповіщення n8n
-                    if comp_state and comp_state['quantity'] < (comp_state['min_threshold'] or 0):
-                        low_stock_alerts.append({
-                            "component_name": comp_state['component_name'],
-                            "supplier": comp_state['supplier'] or "",
-                            "quantity": float(comp_state['quantity']),
-                        })
-
-        # 5. Після успішної транзакції — відправляємо сповіщення в n8n у фоні
-        for alert in low_stock_alerts:
-            background_tasks.add_task(
-                notify_n8n_low_stock,
-                alert['component_name'],
-                alert['supplier'],
-                alert['quantity'],
-            )
-            print(f"[Alert] Scheduled n8n notify: {alert['component_name']} = {alert['quantity']}")
-
         return {
             "status": "logged",
             "item": body.item_code,
             "diff": body.quantity,
             "recipe_updated": len(recipe) > 0,
-            "alerts_sent": len(low_stock_alerts),
         }
-    except HTTPException:
-        raise
     except Exception as e:
         print(f"Error in log_master_work: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/master/logs")
+async def get_master_logs(master_name: str):
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, work_date as date, item_code, quantity::float 
+            FROM bot_workshop.master_logs 
+            WHERE master_name = $1 
+            ORDER BY work_date DESC, id DESC
+        """, master_name)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/master/logs/{log_id}")
+async def delete_master_log(log_id: int):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                log = await conn.fetchrow("""
+                    SELECT quantity, item_code, master_name 
+                    FROM bot_workshop.master_logs WHERE id = $1
+                """, log_id)
+                
+                if not log:
+                    raise HTTPException(status_code=404, detail="Log not found")
+                
+                old_qty = float(log['quantity'])
+                item_code = log['item_code']
+                master_name = log['master_name']
+                diff = -old_qty 
+
+                await conn.execute("""
+                    UPDATE bot_workshop.inventory_cases 
+                    SET quantity = GREATEST(0, quantity + $1), last_update = CURRENT_TIMESTAMP
+                    WHERE item_id = $2
+                """, diff, item_code)
+
+                recipe = await conn.fetch("""
+                    SELECT component_id, items_per_case 
+                    FROM bot_workshop.recipes_cases 
+                    WHERE TRIM(case_sku) ILIKE TRIM($1)
+                """, item_code)
+
+                for r in recipe:
+                    items_returned = float(r['items_per_case']) * old_qty
+                    await conn.execute("""
+                        UPDATE bot_workshop.cases_components 
+                        SET quantity = quantity + $1, last_updated = CURRENT_TIMESTAMP
+                        WHERE id = $2
+                    """, items_returned, r['component_id'])
+
+                task = await conn.fetchrow("""
+                    SELECT id, quantity, completed_quantity 
+                    FROM bot_workshop.master_tasks 
+                    WHERE master_name = $1 AND case_sku = $2 AND status != 'виконано'
+                    ORDER BY created_at DESC LIMIT 1
+                """, master_name, item_code)
+
+                if not task:
+                    task = await conn.fetchrow("""
+                        SELECT id, quantity, completed_quantity 
+                        FROM bot_workshop.master_tasks 
+                        WHERE master_name = $1 AND case_sku = $2
+                        ORDER BY created_at DESC LIMIT 1
+                    """, master_name, item_code)
+
+                if task:
+                    new_completed = float(task['completed_quantity'] or 0) - old_qty
+                    new_status = 'in_progress' 
+                    await conn.execute("""
+                        UPDATE bot_workshop.master_tasks 
+                        SET completed_quantity = GREATEST(0, $1), status = $2 
+                        WHERE id = $3
+                    """, new_completed, new_status, task['id'])
+
+                await conn.execute("DELETE FROM bot_workshop.master_logs WHERE id = $1", log_id)
+
+        return {"status": "deleted"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/master/stats")
 async def get_master_stats(master_name: str):
     p = await get_pool()
     try:
-        # Aggregated stats by month cycle for the current year
         current_year = date.today().year
         rows = await p.fetch("""
             SELECT 
@@ -517,7 +659,6 @@ async def get_master_stats(master_name: str):
             ORDER BY month DESC, cycle DESC
         """, master_name, current_year)
 
-        # Structure as list of periods
         ua_months = ["", "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"]
         
         periods = {}
