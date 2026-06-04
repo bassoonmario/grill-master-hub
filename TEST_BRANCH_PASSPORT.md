@@ -2,8 +2,8 @@
 
 **Гілка:** `test-branch`  
 **Дата створення:** 26.05.2026  
-**Останнє оновлення:** 26.05.2026  
-**Статус:** 🟡 Тестування  
+**Останнє оновлення:** 04.06.2026  
+**Статус:** 🟢 Актуальний (оновлено)  
 **Мова:** TypeScript / Python  
 **Автор:** Vova Vatsko (vatsko.vova@gmail.com)  
 
@@ -13,8 +13,8 @@
 
 | Параметр | Значення |
 |----------|----------|
-| Останній комміт | `f810df853a23c6a1ecf797299419d3485ba4d442` |
-| Mensaje комміту | "Connect all endpoints to real API, remove all demo data" |
+| Останній комміт | `821946882820d8178ab53bc2df087f0a332fcd4a` |
+| Повідомлення комміту | "Fix: Delay MasterCabinet API calls until AuthContext is loaded" |
 | Базова гілка | `main` |
 | Захищена | ❌ Ні |
 
@@ -22,290 +22,121 @@
 
 ## 🎯 Опис гілки TEST-BRANCH
 
-**test-branch** — це експериментальна гілка для тестування нових функціоналів та змін перед їх інтеграцією до main гілки.
+**test-branch** — експериментальна гілка для тестування нових функцій та інтеграцій (Master Cabinet, Master workflow, оновлення UI/UX, Docker і CI-ready конфігурації).
 
-На поточний момент **test-branch** має той же стан що й main, оскільки обидві вказують на останній комміт.
-
----
-
-## 📊 Статистика
-
-| Метрика | Значення |
-|---------|----------|
-| Гілок від цієї | 0 |
-| Комітів (спільних з main) | 3 |
-| Файлів | ~20+ (оцінка) |
-| Розмір | 44 KB |
+Наразі test-branch містить додаткові зміни, які відрізняють її від main (див. розділ "Відмінності").
 
 ---
 
-## 🏗️ Структура проекту на test-branch
+## 📊 Поточний стан (резюме аудиту)
 
-```
-test-branch/
-├── bbq-api/                    # Backend API (Python + FastAPI)
-│   ├── main.py                 # API endpoints
-│   ├── .env.example            # Конфігурація
-│   └── requirements.txt        
-│
-└── bbq-factory-os/             # Frontend (React + TypeScript)
-    ├── src/
-    │   ├── main.tsx            # React entry point
-    │   ├── App.tsx             # Main component
-    │   ├── pages/
-    │   │   ├── Login.tsx       # Login page
-    │   │   ├── Tasker.tsx      # Task management
-    │   │   └── [інші сторінки]
-    │   ├── components/
-    │   │   ├── Layout.tsx      # Main layout
-    │   │   ├── BottomNav.tsx   # Navigation
-    │   │   └── [інші компоненти]
-    │   ├── context/
-    │   │   └── AuthContext.tsx # Auth state
-    │   ├── api.ts              # HTTP client
-    │   └── vite-env.d.ts
-    ├── tailwind.config.js      # Tailwind
-    ├── vite.config.ts          # Vite config
-    ├── tsconfig.json           # TypeScript
-    ├── package.json            # Dependencies
-    └── index.html              # Template
-```
+- Останній комміт на гілці: 821946882820d8 (2026-06-04) — автор Vova Vatsko
+- Branch protection: не встановлено
+- CI (GitHub Actions): немає recent workflow runs на гілці (відсутні або не налаштовані)
+- Відмінності від main: наявні зміни (додаються нові файли та модифікації)
+- Тести/покриття: в репозиторії немає явної інтеграції тестового runner-а або звітів про покриття
 
 ---
 
-## 🔧 Технічний стек test-branch
+## 🔎 Ключові зміни, виявлені в test-branch
 
-### Frontend Dependencies
-```json
-{
-  "react": "^18.3.1",
-  "react-dom": "^18.3.1",
-  "react-router-dom": "^6.26.0",
-  "lucide-react": "^0.383.0",
-  "tailwindcss": "^3.4.7",
-  "vite": "^5.4.1",
-  "typescript": "^5.5.3"
-}
-```
+(Зафіксовано відповідно до diff між main та test-branch)
 
-### Backend Stack
-- **FastAPI** - Web framework
-- **asyncpg** - PostgreSQL async driver
-- **Python 3.x** - Runtime
+1) Backend (bbq-api)
+- Додано значну кількість ендпойнтів для авторизації (/api/auth/register, /api/auth/login, /api/auth/users).
+- Розширено API: /api/master/* (dashboard, tasks CRUD, logs, stats), поліпшено /api/dashboard, /api/tasks, /api/tasker.
+- Додано обробку валідації помилок (RequestValidationError handler) та фонова відправка webhooks (httpx) для n8n при низьких залишках.
+- Додано Dockerfile, requirements.txt оновлено (httpx).
+- Додано .env з реальними (!) значеннями: DB_HOST=34.158.230.196, DB_PASS=secret123, FRONTEND_URL=*
+  - Ризик: конфіг з паролями у репозиторії — потрібно видалити та перемістити в secrets.
 
----
+2) Frontend (bbq-factory-os)
+- Багато нових сторінок і компонентів: MasterCabinet, Balance, оновлені Login, Tasks, Salary, BottomNav, Layout, AuthContext.
+- Змінено VITE_API_URL на https://api-test.wowusik.duckdns.org у .env (тестовий API).
+- Додано Dockerfile і nginx.conf для прод/стейдж збірки.
+- Оновлено UI (шрифти, кольори, tailwind config).
 
-## ✨ Реалізовані функції на test-branch
+3) Інфраструктура
+- Додано docker-compose.yml для локального тестування двох сервісів (api і frontend).
 
-### 🟢 Готово:
-
-#### 1. Автентифікація
-- ✅ Login форма (email/пароль)
-- ✅ 3 ролі користувачів (Admin, Master, Driver)
-- ✅ Auth context & state management
-- ✅ Logout функціональність
-
-#### 2. API Endpoints
-- ✅ `/health` — health check
-- ✅ `/api/stock` — отримання інвентарю
-- ✅ `/api/tasker/cards` — список завдань
-- ✅ `/api/tasker/confirm/{cardId}` — підтвердження завдання
-
-#### 3. Управління Складом
-- ✅ 4 категорії інвентарю
-- ✅ Статус товарів (ok/low/critical)
-- ✅ Мінімальні ліміти запасу
-
-#### 4. Управління Завданнями
-- ✅ Список дорученнь з чекліста
-- ✅ Статуси: new, progress, done
-- ✅ Interactive checkbox UI
-- ✅ Real-time оновлення
-
-#### 5. UI Components
-- ✅ Dark theme (#0a0a0a фон)
-- ✅ Custom color palette (orange #ff5c1a)
-- ✅ Responsive layout
-- ✅ Bottom navigation
-- ✅ Top header bar
-
-#### 6. Database
-- ✅ PostgreSQL connection pooling
-- ✅ Async queries (asyncpg)
-- ✅ Цикл-based логіка (1-15 / 16-кін)
+4) Тестові/інструментальні зміни
+- Додано скомпільовані /pycache/ файли та .env у репо — потрібно видалити з комітів та додати до .gitignore.
 
 ---
 
-## 🧪 Що тестувати на test-branch?
+## ⚠️ Проблеми та рекомендації (критичні та високі пріоритети)
 
-### API Тестування:
-```bash
-# Health check
-curl http://localhost:8000/health
+1) Чутливі дані у репозиторії
+- Файл: bbq-api/.env містить DB credentials (DB_PASS=secret123) і FRONTEND_URL=*.
+- Дія: негайно видалити .env з комітів, додати до .gitignore та перенести секрети у GitHub Secrets / CI secrets.
 
-# Stock endpoint
-curl http://localhost:8000/api/stock
+2) Закомічені бінарні/системні файли
+- Додано: bbq-api/__pycache__/main.cpython-311.pyc — має бути видалено.
+- Дія: git rm --cached цих файлів та додати __pycache__/ до .gitignore.
 
-# Login flow
-POST /api/auth/login
-```
+3) Вразливі CORS та відкриті URL
+- FRONTEND_URL = * у .env та CORSMiddleware allow_origins=["*"] у коді — ризик для production.
+- Дія: обмежити дозволені домени перед продом.
 
-### Frontend Тестування:
-- [ ] Login форма валідація
-- [ ] Role-based UI rendering
-- [ ] Tasker функціональність (add/complete tasks)
-- [ ] Stock список та фільтрація
-- [ ] Navigation between pages
-- [ ] Mobile responsiveness
+4) Відсутність захисту гілки і CI
+- Немає workflow runs для test-branch; не виявлено GitHub Actions pipelines.
+- Дія: налаштувати мінімальний CI (lint, typecheck, unit tests) та захист гілки перед merge.
 
-### Regression Тестування:
-- [ ] Попередні комміти не ламаються
-- [ ] Database connection stable
-- [ ] API responses consistent
+5) Паролі у відкритому вигляді
+- DB_PASS=secret123 — змінити пароль бази, використати секрети.
+
+6) Можливі регресії
+- Значні зміни в API та DB-запитах — потребують інтеграційного тестування з пошуковими даними та staging середовищем.
 
 ---
 
-## 🚀 Команди для роботи з test-branch
+## 🧾 Відмінності test-branch від main (резюме diff)
 
-```bash
-# Перейти на test-branch
-git checkout test-branch
-
-# Оновити локальну гілку з remote
-git pull origin test-branch
-
-# Створити нову feature гілку від test-branch
-git checkout -b feature/new-feature test-branch
-
-# Перемістити зміни в main після тестування
-git checkout main
-git pull origin main
-git merge test-branch
-
-# Запустити фронтенд для тестування
-cd bbq-factory-os
-npm run dev
-
-# Запустити бекенд для тестування
-cd bbq-api
-python main.py
-```
+- Нові файли: docker-compose.yml, bbq-api/Dockerfile, bbq-factory-os/Dockerfile, bbq-factory-os/nginx.conf, багато src компонентів (MasterCabinet, Balance, сторінки), .env зміни.
+- Модифіковані файли: bbq-api/main.py (великі доповнення), bbq-factory-os/src/* (багато змін), TEST_BRANCH_PASSPORT.md оновлено.
+- Видалені/не вказані: — (немає масових видалень).
 
 ---
 
-## 📝 Відмінності test-branch від main
+## 🔧 Рекомендовані дії (кроки для безпечного об'єднання в main)
 
-### Поточний стан:
-**⚠️ На даний момент test-branch та main мають однаковий вміст** (обидві вказують на останній комміт `f810df853a23c6a1ecf797299419d3485ba4d442`)
+1) Безпека та секрети
+- Видалити bbq-api/.env з репозиторію: git rm --cached bbq-api/.env; додати в .gitignore.
+- Встановити DB credentials у GitHub Actions secrets або у середовищі деплойменту.
+- Перезмінити пароль БД, якщо сервер публічний і не мав захисту.
 
-### Рекомендовані тест-сценарії:
+2) Очищення репо
+- Видалити __pycache__ та інші артефакти: git rm --cached -r bbq-api/__pycache__.
+- Додати стандартний .gitignore (Python, Node, env, pycache).
 
-#### Scenario 1: UI Testing
-1. Запустити фронтенд
-2. Увійти з демо-акаунтом
-3. Перевірити всі сторінки роблять
-4. Протестувати на різних екранах
+3) CI / Quality gates
+- Додати GitHub Actions workflow: linters (eslint, flake8/mypy), build (npm build), unit/integration tests, security scan (dependabot, trivy), and deployment on staging.
+- Налаштувати branch protection для main + require PR review.
 
-#### Scenario 2: API Testing
-1. Запустити бекенд
-2. Перевірити endpoints връщають коректні дані
-3. Тестувати error handling
-4. Load тести
+4) Тестування інтеграцій
+- Розгорнути docker-compose локально або на staging (docker-compose.yml) і виконати інтеграційні тести оскільки API проводить маніпуляції зі складом і може списувати компоненти.
 
-#### Scenario 3: Integration Testing
-1. Frontend + Backend разом
-2. Real API calls (не mock data)
-3. Data persistence перевірка
-4. Session management
+5) Рефакторинг і hardening
+- Переглянути місця, де pin_code зберігається у відкритому вигляді у БД (потрібне хешування, bcrypt).
+- Додати обмеження та перевірки у запитах (ownership checks, input validation — наразі є базова валідація, але варто розширити).
 
 ---
 
-## 🔒 Безпека на test-branch
+## ✅ Додано у TEST_BRANCH_PASSPORT.md (оновлення виконано)
 
-| Компонент | Статус | Дія |
-|-----------|--------|-----|
-| CORS | ⚠️ Відкритий | Рестриктувати для production |
-| Passwords | ⚠️ Потребує аудиту | Додати bcrypt хеширування |
-| JWT Tokens | ❌ Відсутні | Впровадити для better security |
-| ENV vars | ✅ OK | .env не в repo |
-| DB Connection | ✅ Pooled | Secure connection strings |
+- Оновлено останній комміт, дату оновлення та статус документа.
+- Додано детальний розбір diff між main та test-branch (включаючи список доданих файлів і основні зміни).
+- Додано список критичних проблем та рекомендацій (секрети, pycache, CORS, CI).
 
 ---
 
-## 📋 Чеклист перед merge до main
+## 📌 Наступні кроки (за бажанням)
 
-Перед тим як merge test-branch → main, перевірити:
-
-- [ ] Всі API endpoints працюють
-- [ ] Frontend не має console errors
-- [ ] Database queries оптимізовані
-- [ ] CORS налаштування закладені для production
-- [ ] Немає hardcoded credentials
-- [ ] Тести пройшли (якщо є)
-- [ ] Code review пройшов
-- [ ] Documentation оновлена
+- Хочете, щоб я:
+  - негайно видалив bbq-api/.env та __pycache__ з комітів у test-branch і закомітив зміни? (Підтвердіть: git push напряму в test-branch)
+  - створив PR з очищенням секретів та .gitignore?
+  - налаштував базовий GitHub Actions workflow (CI) у test-branch і запустив прогін?
 
 ---
 
-## 🔗 Важливі посилання
-
-| Ресурс | Посилання |
-|--------|----------|
-| Гілка на GitHub | https://github.com/bassoonmario/grill-master-hub/tree/test-branch |
-| Main гілка | https://github.com/bassoonmario/grill-master-hub/tree/main |
-| Production | https://grill-master-hub.vercel.app |
-
----
-
-## 📞 Інформація для розробників
-
-```
-Branch Owner: Vova Vatsko
-Email: vatsko.vova@gmail.com
-
-Frontend: React 18.3.1 + TypeScript
-Backend: Python FastAPI
-Database: PostgreSQL
-Deployment: Vercel (Frontend)
-```
-
----
-
-## 📅 Історія комітів (test-branch)
-
-| Дата | Автор | Комміт | Повідомлення |
-|------|-------|--------|------------|
-| 26.05.2026 09:11 | Vova Vatsko | f810df8... | Connect all endpoints to real API, remove all demo data |
-| 26.05.2026 05:17 | Vova Vatsko | 9bf5d99... | Add bbq-factory-os frontend |
-| 26.05.2026 04:51 | Vova Vatsko | e9abd29... | Clear repository |
-
----
-
-## 💡 Рекомендації для test-branch
-
-1. **Створити test suite** для всіх API endpoints
-2. **Додати logging** для дебагу
-3. **Налаштувати staging deployment** для pre-production тестування
-4. **Написати acceptance criteria** для кожної функції
-5. **Setup pre-commit hooks** для code quality checks
-
----
-
-## 📚 Документація
-
-**Основні файли:**
-- `bbq-api/.env.example` — Backend конфігурація
-- `bbq-factory-os/package.json` — Frontend залежності
-- `bbq-api/main.py` — API source code
-- `bbq-factory-os/src/` — React components
-
----
-
-**Паспорт TEST-BRANCH: Версія 1.0**  
-**Дата створення:** 02.06.2026  
-**Статус:** ✅ Актуальний  
-**Для гілки:** test-branch
-
----
-
-*Документ автоматично створено для тестування та аудиту test-branch*
+*Аудит виконано автоматично за запитом користувача. Якщо потрібно деталізувати будь-який пункт — скажіть який саме.*
