@@ -1,25 +1,36 @@
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg: #0a0a0a;
-  --surface: #141414;
-  --surface2: #1c1c1c;
-  --border: #2a2a2a;
-  --orange: #ff5c1a;
-  --orange-dim: #ff5c1a22;
-  --orange-mid: #ff5c1a55;
-  --green: #22c55e;
-  --green-dim: #22c55e22;
-  --yellow: #f59e0b;
-  --yellow-dim: #f59e0b22;
-  --red: #ef4444;
-  --red-dim: #ef444422;
-  --text: #f0f0f0;
-  --text-dim: #666;
-  --text-mid: #999;
+  --void:     #080808;
+  --carbon:   #111009;
+  --ember:    #1a1510;
+  --wood:     #221c12;
+  --gold:     #c9963a;
+  --gold-dim: #c9963a28;
+  --gold-mid: #c9963a66;
+  --steel:    #8a9ba8;
+  --ash:      #3a3530;
+  --smoke:    #5a5248;
+  --mist:     #9a9088;
+  --ivory:    #e8e0d0;
+  --red:      #8b2020;
+  --red-dim:  #8b202028;
+  --green:    #2a6b3a;
+  --green-dim:#2a6b3a28;
+  /* залишаємо старі для сумісності */
+  --bg:       #080808;
+  --surface:  #111009;
+  --surface2: #1a1510;
+  --border:   #3a3530;
+  --orange:   #c9963a;
+  --orange-dim:#c9963a28;
+  --orange-mid:#c9963a66;
+  --text:     #e8e0d0;
+  --text-dim: #5a5248;
+  --text-mid: #9a9088;
 }
 
 * { -webkit-tap-highlight-color: transparent; }
@@ -27,41 +38,6 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Rajdhani', sans-serif;
   overscroll-behavior: none;
 }
-
-@keyframes slideUp {
-  from { opacity: 0; transform: translateY(24px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes pulse-glow {
-  0%, 100% { opacity: 0.5; transform: scale(1); }
-  50%       { opacity: 1;   transform: scale(1.08); }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.3; }
-}
-
-@keyframes flicker {
-  0%, 100% { transform: scale(1) rotate(-2deg); }
-  50%       { transform: scale(1.05) rotate(2deg); }
-}
-
-.animate-slide-up  { animation: slideUp 0.45s ease-out both; }
-.animate-fade-in   { animation: fadeIn  0.3s  ease-out both; }
-.animate-blink     { animation: blink   1.5s  ease-in-out infinite; }
-.animate-flicker   { animation: flicker 2s    ease-in-out infinite; }
-
-/* scrollbar */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }

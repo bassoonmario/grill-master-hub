@@ -46,7 +46,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative'
+  category: 'main' | 'ready' | 'operative' | 'cases'
 }
 
 export interface Task {
@@ -76,6 +76,25 @@ export interface SalaryData {
   plan_pct: number
   days_left: number
   cycle_id: number
+}
+
+export interface MasterDashboard {
+  potential_earnings: number
+  current_earnings: number
+  cycle: string
+  tasks: { 
+    id: number
+    case_sku: string
+    quantity: number
+    completed: number
+    is_priority: boolean 
+  }[]
+}
+
+export interface MasterStatPeriod {
+  period: string
+  earnings: number
+  models: { name: string; qty: number }[]
 }
 
 // ─── DEMO DATA (замінити коментарі на get() виклики) ─────────────────────────
@@ -160,4 +179,27 @@ export const api = {
   confirmTasker: (id: number) =>
     // TODO: return post('/api/tasker/confirm', { id })
     post('/api/tasker/confirm', { id }).catch(() => console.log('demo mode')),
+
+  // ─── MASTER CABINET API ─────────────────────────────────────────────────────
+  
+  getMasterDashboard: (masterName: string): Promise<MasterDashboard> =>
+    get<MasterDashboard>(`/api/master/dashboard?master_name=${encodeURIComponent(masterName)}`),
+
+  createMasterTask: (masterName: string, caseSku: string, quantity: number) =>
+    post('/api/master/tasks', { master_name: masterName, case_sku: caseSku, quantity }),
+
+  deleteMasterTask: (taskId: number) =>
+    fetch(`${BASE}/api/master/tasks/${taskId}`, { 
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
+    }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
+
+  logWork: (masterName: string, itemCode: string, quantity: number) =>
+    post('/api/master/logs', { master_name: masterName, item_code: itemCode, quantity }),
+
+  getMasterStats: (masterName: string): Promise<MasterStatPeriod[]> =>
+    get<MasterStatPeriod[]>(`/api/master/stats?master_name=${encodeURIComponent(masterName)}`),
+
+  getItems: (): Promise<string[]> =>
+    get<string[]>('/api/items'),
 }
