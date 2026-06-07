@@ -25,6 +25,16 @@ services:
       - main-network
     restart: unless-stopped
 
+  mcp-postgres:
+    container_name: mcp-postgres-server
+    build:
+      context: ./mcp-server
+    env_file:
+      - ./bbq-api/.env
+    networks:
+      - main-network
+    restart: always
+
 networks:
   main-network:
     external: true

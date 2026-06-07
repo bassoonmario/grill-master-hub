@@ -1,5 +1,8 @@
 // ─── API BASE ─────────────────────────────────────────────────────────────────
-const BASE = import.meta.env.VITE_API_URL ?? ''
+const BASE = import.meta.env.VITE_API_URL ?? 
+  (typeof window !== 'undefined' && window.location.hostname === 'test.wowusik.duckdns.org'
+    ? `${window.location.protocol}//api-test.wowusik.duckdns.org`
+    : '')
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -101,6 +104,25 @@ export interface MasterLog {
   date: string
   item_code: string
   quantity: number
+}
+
+export interface Shipment {
+  id: number
+  shipment_date: string
+  article: string
+  quantity: number
+  is_engraved: boolean
+  raw_comment: string
+  is_case: boolean
+}
+
+export interface Defect {
+  id: number
+  sku: string
+  item_type: string
+  reason: string
+  defect_date: string
+  status: string
 }
 
 // ─── API METHODS ─────────────────────────────────────────────────────────────
@@ -226,4 +248,11 @@ export const api = {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
     }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
+
+  // ─── NEW METHODS ────────────────────────────────────────────────────────────
+  getShipments: (): Promise<Shipment[]> =>
+    get<Shipment[]>('/api/master/shipments'),
+
+  getDefects: (): Promise<Defect[]> =>
+    get<Defect[]>('/api/master/defects'),
 }

@@ -243,6 +243,24 @@ async def get_salary():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/master/shipments")
+async def get_shipments():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT * FROM bot_workshop.daily_shipments ORDER BY shipment_date DESC LIMIT 50")
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/master/defects")
+async def get_defects():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT * FROM bot_workshop.defects ORDER BY defect_date DESC LIMIT 50")
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ─── MASTER CABINET ENDPOINTS ──────────────────────────────────────────────────
 
 @app.get("/api/master/dashboard")

@@ -19,6 +19,12 @@ interface AuthCtx {
 const AuthContext = createContext<AuthCtx | null>(null)
 const STORAGE_KEY = 'bbq_user'
 
+// Динамічний базовий URL для API
+const AUTH_BASE = import.meta.env.VITE_API_URL ?? 
+  (typeof window !== 'undefined' && window.location.hostname === 'test.wowusik.duckdns.org'
+    ? `${window.location.protocol}//api-test.wowusik.duckdns.org`
+    : '');
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser]       = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
@@ -32,7 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const login = async (tid: number, pin: string) => {
-    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
+    const res = await fetch(`${AUTH_BASE}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tid, pin_code: pin }),
@@ -44,7 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const register = async (name: string, role: Role, pin: string): Promise<User> => {
-    const res = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/register`, {
+    const res = await fetch(`${AUTH_BASE}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, role, pin_code: pin }),

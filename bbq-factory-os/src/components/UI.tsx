@@ -2,7 +2,7 @@ import { ReactNode } from 'react'
 
 // ─── STAT CARD ────────────────────────────────────────────────────────────────
 interface StatCardProps {
-  icon: string
+  icon: React.ReactNode // Адаптовано під JSX-компоненти lucide-react
   value: string | number
   label: string
   accent?: 'orange' | 'green' | 'yellow' | 'red'
@@ -26,7 +26,7 @@ export function StatCard({ icon, value, label, accent = 'orange', wide, children
     >
       <div className="absolute top-0 left-0 right-0 h-0.5" style={{ background: color, opacity: 0.6 }} />
       <div>
-        <span className="text-2xl block mb-2">{icon}</span>
+        <span className="block mb-2 text-[var(--accent)]">{icon}</span>
         <div className="font-display text-4xl leading-none" style={{ color }}>{value}</div>
         <div className="text-xs text-[var(--text-dim)] mt-1 font-mono tracking-wide">{label}</div>
       </div>

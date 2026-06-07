@@ -1,6 +1,6 @@
 # 📋 ПАСПОРТ РЕПОЗИТОРІЮ - grill-master-hub
 **Дата створення:** 26.05.2026
-**Останнє оновлення:** 04.06.2026
+**Останнє оновлення:** 05.06.2026
 **Статус:** 🟢 Активна розробка
 **Мова:** TypeScript / Python
 **Приватність:** Private
@@ -31,15 +31,16 @@ grill-master-hub/
     │   │   ├── Warehouse.tsx
     │   │   ├── Tasks.tsx
     │   │   ├── Tasker.tsx
-    │   │   └── Salary.tsx
+    │   │   ├── Salary.tsx
+    │   │   └── MasterCabinet.tsx # Нова сторінка
     │   ├── components/
     │   │   ├── Layout.tsx
     │   │   ├── BottomNav.tsx
     │   │   └── UI.tsx
     │   ├── context/
-    │   │   └── AuthContext.tsx  # localStorage сесія
+    │   │   └── AuthContext.tsx  # Логіка входу + API_BASE
     │   └── lib/
-    │       └── api.ts           # Всі HTTP запити
+    │       └── api.ts           # HTTP запити
     ├── tailwind.config.js
     ├── vite.config.ts
     └── package.json
@@ -72,55 +73,48 @@ grill-master-hub/
 | bbq.wowusik.duckdns.org | Бойовий фронтенд (Production) | http://bbq-frontend:80 |
 | test.wowusik.duckdns.org | Тестовий фронтенд | http://bbq-frontend-test:80 |
 | api.wowusik.duckdns.org | Бойовий API (FastAPI) | http://bbq-api:8000 |
-| api-test.wowusik.duckdns.org | Тестовий API (FastAPI) | http://api-test:8000 ⚠️ Block Common Exploits = OFF |
+| api-test.wowusik.duckdns.org | Тестовий API (FastAPI) | http://bbq-api-test:8000 |
 | n8n.wowusik.duckdns.org | n8n автоматизація | http://n8n:5678 |
 | omi.wowusik.duckdns.org | Omi інтеграція | http://127.0.0.1:8082 |
 
-> ⚠️ **ВАЖЛИВО для агентів:** НЕ використовувати IP 172.17.0.1 в налаштуваннях.
-> Всі контейнери спілкуються через внутрішні імена Docker в мережі main-network.
+> ⚠️ **ВАЖЛИВО:** Всі контейнери спілкуються через внутрішні імена Docker в мережі `main-network`.
 
 ---
 
 ## 🐳 Docker інфраструктура
 
 ### Мережа: main-network
-├── nginx-proxy-manager
-├── bbq-api
-├── bbq-api-test
-├── bbq-frontend
-├── bbq-frontend-test
-└── n8n
 
-### Команди оновлення
+### Команди оновлення (Чистий білд)
+
 ```bash
-# Оновити ТЕСТОВИЙ фронтенд:
-cd /home/wowusik/grill_bot_new/repos/grill-master-hub/bbq-factory-os && npm run build
-docker stop bbq-frontend-test && docker rm bbq-frontend-test
-docker run -d --name bbq-frontend-test --restart unless-stopped \
-  --network main-network -p 3005:80 \
-  -v /home/wowusik/grill_bot_new/repos/grill-master-hub/bbq-factory-os/dist:/usr/share/nginx/html:ro \
-  nginx:alpine
-
 # Оновити ТЕСТОВИЙ API:
 docker stop bbq-api-test && docker rm bbq-api-test
+docker build -t bbq-api-test -f bbq-api/Dockerfile bbq-api/
 docker run -d --name bbq-api-test --restart unless-stopped \
-  --network main-network -p 8001:8000 \
-  -v /home/wowusik/grill_bot_new/repos/grill-master-hub/bbq-api/main.py:/app/main.py:ro \
-  -v /home/wowusik/grill_bot_new/fastapigrill/bbq-api/.env:/app/.env:ro \
-  python:3.11-slim \
-  bash -c "pip install fastapi uvicorn asyncpg python-dotenv -q && cd /app && uvicorn main:app --host 0.0.0.0 --port 8000"
+  --network main-network -p 8001:8000 --env-file bbq-api/.env bbq-api-test
+
+# Оновити ТЕСТОВИЙ фронтенд (Vite вшиває змінні при білді):
+cd /home/wowusik/grill_bot_new/repos/grill-master-hub/
+# Тимчасово записуємо VITE_API_URL в .env, білдимо, потім видаляємо
+echo "VITE_API_URL=http://bbq-api-test:8000" > bbq-factory-os/.env
+docker build -t bbq-frontend-test -f bbq-factory-os/Dockerfile bbq-factory-os/
+rm bbq-factory-os/.env
+docker stop bbq-frontend-test && docker rm bbq-frontend-test
+docker run -d --name bbq-frontend-test --restart unless-stopped \
+  --network main-network -p 3005:80 bbq-frontend-test
 ```
 
 ---
 
 ## 💾 База даних (PostgreSQL)
-
-### Схема: bot_workshop
+*Схема: bot_workshop*
 | Таблиця | Призначення |
 |---|---|
 | inventory_main | Основний склад |
 | inventory_finished | Готова продукція |
-| inventory_operative | Оперативний склад |
+| daily_shipments | Відправки |
+| defects | Брак |
 | master_tasks | Завдання майстрів |
 | master_logs | Виконана робота |
 
@@ -128,46 +122,20 @@ docker run -d --name bbq-api-test --restart unless-stopped \
 
 ## 📝 Журнал змін (Change Log)
 
-### Сесія 4: Інтеграція сповіщень та безпека складу (04.06.2026)
-* Запобіжник мінусів (Бекенд): Реалізовано жорстку перевірку залишків сировини в POST /api/master/logs. Транзакція блокується з помилкою 400, якщо компонентів немає на складі.
-* Реверс при видаленні завдань: В ендпоінт DELETE /api/master/tasks/{id} інтегровано функцію повернення деталей на склад за рецептом моделі.
-* Виправлення маршрутизації Docker ↔ n8n: Усунено проблему зв'язку всередині контейнерів. Змінну N8N_COMPONENTS_WEBHOOK_URL переведено на внутрішній IP докер-мережі (172.17.0.1).
+### Сесія 5: Інтеграція Відправок та Браку (05.06.2026)
+- Додано GET /api/master/shipments та /api/master/defects.
+- Реалізовано динамічну маршрутизацію для Frontend (API_BASE).
+- Оновлено Кабінет Майстра (вкладки відправок та браку).
+- Виправлено "мовчазні" помилки авторизації (Fix #4, #5).
+- Оновлено Docker інструкції: перехід на повний білд образу.
+
+### Сесія 4: (04.06.2026)
+- Реалізовано логування, безпеку складу та алярми через n8n.
 
 ---
 
-## 📋 План подальшої розробки (Backlog / TODO)
-
-### 🚀 Наступна задача: Перенос алярмів на створення/зміну ПЛАНУ (На випередження)
-1. **Очищення POST /api/master/logs:** 
-    * Прибрати (закоментувати) тимчасовий жорсткий запобіжник HTTPException(400), щоб майстри могли фіксувати роботу, навіть якщо склад іде в мінус. 
-    * Вимкнути надсилання вебхуків з цього ендпоінту.
-2. **Алярми при створенні плану (POST /api/master/tasks):**
-    * При додаванні нового завдання рахувати прогнозний залишок: поточний_залишок - (рецепт * план).
-    * Якщо значення < min_limit, запускати фоновий процес (BackgroundTasks) та крити на вебхук n8n дані: supplier, component_name, quantity (актуальний залишок). План при цьому створювати дозволяється.
-3. **Логіка реверсу/дельти при редагуванні плану (PUT /api/master/tasks/{id}):**
-    * Рахувати різницю: diff = нова_кількість_плану - стара_кількість_плану.
-    * Якщо diff > 0 (план збільшився), перевіряти дефіцит під цю дозаявку: поточний_залишок - (рецепт * diff). Якщо впали нижче ліміту — тригерити n8n.
-    * Якщо diff <= 0 (план зменшився або видалений), нічого не надсилати, просто оновлювати базу.
-
----
-
-## 📈 Історія комітів (Commit History)
-| Дата | Повідомлення |
-|---|---|
-| 04.06.2026 | "Fix: Delay MasterCabinet API calls until AuthContext is loaded" |
-| 04.06.2026 | "Інтеграція сповіщень та безпека складу: запобіжник мінусів, реверс при видаленні завдань" |
-| 26.05.2026 | "Connect all endpoints to real API, remove all demo data" |
-| 26.05.2026 | "Add bbq-factory-os frontend" |
-| 26.05.2026 | "Clear repository" |
-
----
-
-## 🚀 Пріоритети розвитку
+## 📋 План подальшої розробки
 - [ ] Виправити автологін (localStorage)
 - [ ] Salary.tsx — деталізація
 - [ ] Баланс — об'єднана таблиця
-- [ ] Введення виконаної роботи за день
-- [ ] JWT авторизація замість піну
-
----
-*Оновлено: 04.06.2026*
+- [ ] JWT авторизація
