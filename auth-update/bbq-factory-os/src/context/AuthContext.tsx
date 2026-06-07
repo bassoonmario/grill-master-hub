@@ -23,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser]       = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Автологін при відкритті додатку
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -50,14 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify({ name, role, pin_code: pin }),
     })
     if (!res.ok) {
-      let msg = 'Помилка реєстрації'
-      try {
-        const err = await res.json()
-        if (typeof err.detail === 'string') msg = err.detail
-        else if (Array.isArray(err.detail)) msg = err.detail.map((e: any) => e.msg || e.detail || 'Error').join(', ')
-        else if (typeof err.detail === 'object') msg = JSON.stringify(err.detail)
-      } catch {}
-      throw new Error(msg)
+      const err = await res.json()
+      throw new Error(err.detail || 'Помилка реєстрації')
     }
     const u: User = await res.json()
     localStorage.setItem(STORAGE_KEY, JSON.stringify(u))
@@ -77,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 }
 
-export function useAuth(): AuthCtx {
+export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be inside AuthProvider')
   return ctx

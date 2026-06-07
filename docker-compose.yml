@@ -1,0 +1,30 @@
+services:
+  bbq-api-test:
+    container_name: bbq-api-test
+    build:
+      context: ./bbq-api
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./bbq-api:/app
+    env_file:
+      - ./bbq-api/.env
+    networks:
+      - main-network
+    restart: unless-stopped
+
+  bbq-frontend-test:
+    container_name: bbq-frontend-test
+    build:
+      context: ./bbq-factory-os
+      dockerfile: Dockerfile
+    ports:
+      - "3005:80"
+    networks:
+      - main-network
+    restart: unless-stopped
+
+networks:
+  main-network:
+    external: true

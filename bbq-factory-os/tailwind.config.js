@@ -3,9 +3,9 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"Bebas Neue"', 'cursive'],
-        mono: ['"IBM Plex Mono"', 'monospace'],
-        sans: ['"IBM Plex Sans"', 'sans-serif'],
+        display: ['"Cormorant Garamond"', 'serif'],
+        mono:    ['"JetBrains Mono"', 'monospace'],
+        sans:    ['"Rajdhani"', 'sans-serif'],
       },
       colors: {
         bg: '#0a0a0a',

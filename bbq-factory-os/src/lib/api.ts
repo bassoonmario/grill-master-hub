@@ -1,5 +1,4 @@
 // ─── API BASE ─────────────────────────────────────────────────────────────────
-// Змінюй тільки цей рядок коли підключаєш реальний сервер
 const BASE = import.meta.env.VITE_API_URL ?? ''
 
 async function get<T>(path: string): Promise<T> {
@@ -46,7 +45,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative'
+  category: 'main' | 'ready' | 'operative' | 'cases'
 }
 
 export interface Task {
@@ -78,7 +77,33 @@ export interface SalaryData {
   cycle_id: number
 }
 
-// ─── DEMO DATA (замінити коментарі на get() виклики) ─────────────────────────
+export interface MasterDashboard {
+  potential_earnings: number
+  current_earnings: number
+  cycle: string
+  tasks: { 
+    id: number
+    case_sku: string
+    quantity: number
+    completed: number
+    is_priority: boolean 
+  }[]
+}
+
+export interface MasterStatPeriod {
+  period: string
+  earnings: number
+  models: { name: string; qty: number }[]
+}
+
+export interface MasterLog {
+  id: number
+  date: string
+  item_code: string
+  quantity: number
+}
+
+// ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
   dashboard: async (): Promise<DashboardData> => {
@@ -158,6 +183,47 @@ export const api = {
   },
 
   confirmTasker: (id: number) =>
-    // TODO: return post('/api/tasker/confirm', { id })
     post('/api/tasker/confirm', { id }).catch(() => console.log('demo mode')),
+
+  // ─── MASTER CABINET API ─────────────────────────────────────────────────────
+  
+  getMasterDashboard: (masterName: string): Promise<MasterDashboard> =>
+    get<MasterDashboard>(`/api/master/dashboard?master_name=${encodeURIComponent(masterName)}`),
+
+  createMasterTask: (masterName: string, caseSku: string, quantity: number) =>
+    post('/api/master/tasks', { master_name: masterName, case_sku: caseSku, quantity }),
+
+  deleteMasterTask: (taskId: number) =>
+    fetch(`${BASE}/api/master/tasks/${taskId}`, { 
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
+    }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
+
+  logWork: (masterName: string, itemCode: string, quantity: number) =>
+    post('/api/master/logs', { master_name: masterName, item_code: itemCode, quantity }),
+
+  getMasterStats: (masterName: string): Promise<MasterStatPeriod[]> =>
+    get<MasterStatPeriod[]>(`/api/master/stats?master_name=${encodeURIComponent(masterName)}`),
+
+  getItems: (): Promise<string[]> =>
+    get<string[]>('/api/items'),
+
+  getMasterLogs: (masterName: string): Promise<MasterLog[]> =>
+    get<MasterLog[]>(`/api/master/logs?master_name=${encodeURIComponent(masterName)}`),
+
+  updateMasterLog: (logId: number, quantity: number) =>
+    fetch(`${BASE}/api/master/logs/${logId}`, {
+      method: 'PUT',
+      headers: { 
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` 
+      },
+      body: JSON.stringify({ quantity })
+    }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
+
+  deleteMasterLog: (logId: number) =>
+    fetch(`${BASE}/api/master/logs/${logId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
+    }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
 }

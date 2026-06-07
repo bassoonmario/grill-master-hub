@@ -4,6 +4,9 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [react()],
+  server: {
+    allowedHosts: ["test.wowusik.duckdns.org"]
+  },
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') }
   }
