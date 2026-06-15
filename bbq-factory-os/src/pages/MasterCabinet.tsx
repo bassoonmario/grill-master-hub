@@ -15,16 +15,16 @@ interface UnifiedStock {
 
 const CATEGORIES = [
   { id: 'standard', title: 'СТАНДАРТНІ ГРИЛІ', color: '#D4AF37', icon: Ruler },
-  { id: 'large',    title: 'ВЕЛИКІ ГРИЛІ',    color: '#D4AF37', icon: Truck },
-  { id: 'premium',  title: 'ПРЕМІУМ СЕРІЯ',   color: '#D4AF37', icon: ShieldCheck },
-  { id: 'minibars', title: 'МІНІ-БАРИ',       color: '#D4AF37', icon: Wine },
+  { id: 'large', title: 'ВЕЛИКІ ГРИЛІ', color: '#D4AF37', icon: Truck },
+  { id: 'premium', title: 'ПРЕМІУМ СЕРІЯ', color: '#D4AF37', icon: ShieldCheck },
+  { id: 'minibars', title: 'МІНІ-БАРИ', color: '#D4AF37', icon: Wine },
 ]
 
 export function MasterCabinet() {
   const { user, loading: authLoading } = useAuth()
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab') || 'plan'
-  
+
   const [data, setData] = useState<MasterDashboard | null>(null)
   const [logs, setLogs] = useState<MasterLog[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
@@ -40,7 +40,7 @@ export function MasterCabinet() {
   const [localFacts, setLocalFacts] = useState<Record<number, string>>({})
 
   const [unifiedItems, setUnifiedItems] = useState<UnifiedStock[]>([])
-  
+
   // Стейт для акордеонів: балансу складу та групування відправок за днями
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [openShipmentDays, setOpenShipmentDays] = useState<Record<string, boolean>>({})
@@ -75,19 +75,26 @@ export function MasterCabinet() {
       setData(d)
       setLogs(l)
       setAvailableItems(items)
-      setShipments(s)
+      // extras з PostgreSQL JSONB може прийти як рядок — парсимо
+      const parsedShipments = s.map(item => ({
+        ...item,
+        extras: typeof item.extras === 'string'
+          ? JSON.parse(item.extras)
+          : (item.extras ?? {})
+      }))
+      setShipments(parsedShipments)
       setDefects(df)
-      
+
       const filtered = stock.filter(i => i.category === 'ready' || i.category === 'cases')
       const grouped = filtered.reduce((acc, item) => {
         const cleanSku = item.sku.trim()
         if (!acc[cleanSku]) {
-          acc[cleanSku] = { 
-            sku: cleanSku, 
-            name: item.name, 
-            ready: 0, 
-            cases: 0, 
-            category: parseCategory(cleanSku) 
+          acc[cleanSku] = {
+            sku: cleanSku,
+            name: item.name,
+            ready: 0,
+            cases: 0,
+            category: parseCategory(cleanSku)
           }
         }
         if (item.category === 'ready') acc[cleanSku].ready = item.qty
@@ -96,7 +103,7 @@ export function MasterCabinet() {
       }, {} as Record<string, UnifiedStock>)
 
       setUnifiedItems(Object.values(grouped))
-      
+
       const initialFacts: Record<number, string> = {}
       d.tasks.forEach(t => {
         initialFacts[t.id] = String(t.completed)
@@ -105,7 +112,7 @@ export function MasterCabinet() {
 
       // Автоматично розгортаємо найновіший день у відправках
       if (s.length > 0) {
-        const sortedDates = [...new Set(s.map(item => item.shipment_date))].sort(
+        const sortedDates = [...new Set(s.map(item => item.report_date))].sort(
           (a, b) => new Date(b).getTime() - new Date(a).getTime()
         )
         if (sortedDates[0]) {
@@ -118,9 +125,9 @@ export function MasterCabinet() {
     }
   }, [user])
 
-  useEffect(() => { 
+  useEffect(() => {
     if (!authLoading) {
-        loadData() 
+      loadData()
     }
   }, [user, authLoading, loadData])
 
@@ -154,7 +161,7 @@ export function MasterCabinet() {
     try {
       await api.deleteMasterTask(taskId)
       await loadData()
-    } catch {}
+    } catch { }
   }
 
   const handleInputChange = (taskId: number, val: string) => {
@@ -205,176 +212,67 @@ export function MasterCabinet() {
     }
   }
 
-  // ── ЛОГІКА СОРТУВАННЯ ТА АГРЕГАЦІЇ ВІДПРАВОК (ФОРМАТ N8N) ──
+  // ── ГРУПУВАННЯ ВІДПРАВОК — читаємо готові дані з БД, без парсингу ──
   const skuSortKey = (sku: string): number => {
-    const match = sku.match(/^[GTМВCHB](\d+)/i)
+    const match = sku.match(/^[GTМВ]*(\d+)/i)
     return match ? parseInt(match[1]) : 9999
   }
 
-  // Назви ящиків (BOX) — повна відповідність n8n
-  const BOX_NAMES: Record<string, string> = {
-    'B01':'Автолюбитель стандарт','B02':'Автолюбитель максимум',
-    'B03':'Полуничка','B04':'BBQ','B05':'Винний',
-    'B06':'Пивний','B07':'Віскі','B08':'Лазня','B09':'Турист'
-  }
-  const BOX_SKUS = new Set(Object.keys(BOX_NAMES))
-
-
   const getGroupedShipments = () => {
-    // extras зберігають числові значення як в n8n
-    type AggregatedItem = { qty: number; extras: Record<string, number>; pickupTime?: string; boxNote?: string; boxName?: string }
-    type CategoryData = Record<string, AggregatedItem>
+    type DayItem = {
+      article: string
+      quantity: number
+      extras: Record<string, number | string>
+      pickup_time: string | null
+    }
     type DayData = {
-      categories: {
-        'Звичайні': CategoryData
-        'Гравіювання': CategoryData
-        'Туристичний': CategoryData
-        'Бар': CategoryData
-        'Ящик': CategoryData
-        'Самовивіз': CategoryData
-      }
+      categories: Record<string, DayItem[]>
       total: number
       pilnykCount: number
+      hasWholesale: boolean
     }
 
     const grouped: Record<string, DayData> = {}
 
-    const makeDay = (): DayData => ({
-      categories: {
-        'Звичайні': {},
-        'Гравіювання': {},
-        'Туристичний': {},
-        'Бар': {},
-        'Ящик': {},
-        'Самовивіз': {},
-      },
-      total: 0,
-      pilnykCount: 0,
-    })
-
     shipments.forEach(s => {
-      const date = s.shipment_date
-      const rawArticle = (s.article || '').trim().toUpperCase()
-      const comment = (s.raw_comment || '').toLowerCase()
-      const qty = s.quantity || 0
-      const isEngraved = !!s.is_engraved
-      const isCase = !!s.is_case
-
-      if (!grouped[date]) grouped[date] = makeDay()
+      const date = s.report_date
+      if (!grouped[date]) {
+        grouped[date] = {
+          categories: {},
+          total: 0,
+          pilnykCount: 0,
+          hasWholesale: false,
+        }
+      }
       const day = grouped[date]
 
-      // ── Визначення базового SKU (без H-суфіксу горіха) ──
-      const isHazelnut = rawArticle.startsWith('G') && rawArticle.endsWith('H')
-      const baseSku = isHazelnut ? rawArticle.replace(/H$/, '') : rawArticle
-
-      // ── Визначення категорії (точно як в n8n) ──
-      const isPickup = comment.includes('самовивіз') || comment.includes('до 16:30')
-      const isTourist = rawArticle.startsWith('T')
-      const isBar = rawArticle.startsWith('MB')
-      const isBox = BOX_SKUS.has(rawArticle)
-
-      // ── Ящик ──
-      if (isBox) {
-        const name = BOX_NAMES[rawArticle] || rawArticle
-        let boxNote = ''
-        if (comment.includes('закрит')) boxNote = 'закритий'
-        else if (comment.includes('відкрит') || comment.includes('открит')) boxNote = 'відкритий'
-        if (comment.includes('грав')) boxNote = boxNote ? boxNote + ', грав' : 'грав'
-        const key = boxNote ? `${baseSku}||${boxNote}` : baseSku
-        if (!day.categories['Ящик'][key]) {
-          day.categories['Ящик'][key] = { qty: 0, extras: {}, boxName: name, boxNote }
-        }
-        day.categories['Ящик'][key].qty += qty
+      // Пильник — окремо в футер
+      if (s.category === 'Пильник') {
+        day.pilnykCount += s.quantity
         return
       }
 
-      // ── Туристичний ──
-      if (isTourist) {
-        if (!day.categories['Туристичний'][baseSku]) {
-          day.categories['Туристичний'][baseSku] = { qty: 0, extras: {} }
-        }
-        day.categories['Туристичний'][baseSku].qty += qty
-        day.total += qty
-        // extras туристу
-        if (comment.includes('без лого') || comment.includes('без гравіюван')) {
-          day.categories['Туристичний'][baseSku].extras['без лого'] = (day.categories['Туристичний'][baseSku].extras['без лого'] || 0) + qty
-        }
-        return
+      // Опт — додаємо префікс до назви категорії
+      const catKey = s.is_wholesale ? `⚡️ Опт — ${s.category}` : s.category
+      if (!day.categories[catKey]) day.categories[catKey] = []
+
+      day.categories[catKey].push({
+        article: s.article,
+        quantity: s.quantity,
+        extras: s.extras || {},
+        pickup_time: s.pickup_time ?? null,
+      })
+
+      // Total — не рахуємо Ящик і Бар (як в n8n totalCount)
+      if (!['Ящик', 'Бар'].includes(s.category)) {
+        day.total += s.quantity
       }
 
-      // ── Бар ──
-      if (isBar) {
-        if (!day.categories['Бар'][baseSku]) {
-          day.categories['Бар'][baseSku] = { qty: 0, extras: {} }
-        }
-        day.categories['Бар'][baseSku].qty += qty
-        return
-      }
-
-      // ── ПИЛЬНИК — окремий рядок з БД, просто додаємо до лічильника ──
-      if (rawArticle === 'ПИЛЬНИК') {
-        day.pilnykCount += qty
-        return
-      }
-
-      // ── Підрахунок загального ──
-      day.total += qty
-
-      // ── Збір extras (числові значення, порядок як в n8n) ──
-      const extras: Record<string, number> = {}
-      if (isHazelnut || comment.includes('горіх')) {
-        extras['горіх'] = qty
-      }
-      if (comment.includes('без лого') || comment.includes('без гравіюван')) {
-        extras['без лого'] = qty
-      }
-      // х2 / дві сторони
-      if (comment.includes('х2') || comment.includes('дві сторони')) {
-        extras['х2'] = 1
-      }
-      // чохол
-      if (isCase || comment.includes('чохол')) {
-        extras['чохол'] = qty
-      }
-      // шамп 2 сторони / шамп
-      const shamp2match = comment.match(/(\d+)\s*шамп.*2\s*сторон/i)
-      const shamp1match = comment.match(/(\d+)\s*шамп(?!.*2\s*сторон)/i)
-      if (shamp2match) extras['шамп 2 сторони'] = parseInt(shamp2match[1])
-      else if (shamp1match) extras['шамп'] = parseInt(shamp1match[1])
-      // грав кейс
-      if (comment.includes('грав кейс')) {
-        extras['грав кейс'] = qty
-      }
-
-      // ── Самовивіз ──
-      if (isPickup) {
-        const pickupTime = comment.includes('до 16:30') ? 'до 16:30' : ''
-        if (!day.categories['Самовивіз'][baseSku]) {
-          day.categories['Самовивіз'][baseSku] = { qty: 0, extras: {}, pickupTime }
-        }
-        day.categories['Самовивіз'][baseSku].qty += qty
-        // merge extras
-        for (const [k, v] of Object.entries(extras)) {
-          day.categories['Самовивіз'][baseSku].extras[k] = Math.max(day.categories['Самовивіз'][baseSku].extras[k] || 0, v)
-        }
-        if (pickupTime) day.categories['Самовивіз'][baseSku].pickupTime = pickupTime
-        return
-      }
-
-      // ── Гравіювання або Звичайні ──
-      const cat = isEngraved ? 'Гравіювання' : 'Звичайні'
-      if (!day.categories[cat][baseSku]) {
-        day.categories[cat][baseSku] = { qty: 0, extras: {} }
-      }
-      day.categories[cat][baseSku].qty += qty
-      for (const [k, v] of Object.entries(extras)) {
-        day.categories[cat][baseSku].extras[k] = Math.max(day.categories[cat][baseSku].extras[k] || 0, v)
-      }
+      if (s.is_wholesale) day.hasWholesale = true
     })
 
     return grouped
   }
-
 
 
   if (loading && !data) return <Spinner />
@@ -389,14 +287,14 @@ export function MasterCabinet() {
       <div className="p-4 pt-6 w-full">
         <div className="flex justify-between items-end mb-6">
           <div className="mb-4">
-            <h1 className="font-display text-xl md:text-2xl text-[#c9963a] uppercase tracking-wider mb-2">Кабінет Майстра</h1>
+            <h1 className="font-display text-xl md:text-2xl text-[#c9963a] uppercase tracking-wider mb-2">GRILLS FACTORY</h1>
             <p className="text-[var(--text-dim)] font-mono text-[10px] tracking-widest uppercase mt-1">
-              {user?.name} • Цикл {data?.cycle}
+              цикл {data?.cycle || '—'} • {user?.name}
             </p>
           </div>
           {/* Справжня кнопка синхронізації */}
-          <button 
-            onClick={loadData} 
+          <button
+            onClick={loadData}
             disabled={loading}
             className="p-3 bg-white/5 border border-white/10 text-white rounded-xl active:scale-95 transition-all disabled:opacity-40"
           >
@@ -416,7 +314,7 @@ export function MasterCabinet() {
           <div className="space-y-4">
             <div className="flex justify-between items-center">
               <SectionTitle>Активні завдання</SectionTitle>
-              <button 
+              <button
                 onClick={() => setIsAdding(true)}
                 className="bg-white/5 border border-white/10 text-[var(--orange)] px-3 py-1 rounded-lg text-xs font-mono tracking-tighter flex items-center gap-1 active:scale-95 transition-all"
               >
@@ -433,7 +331,7 @@ export function MasterCabinet() {
                   <div className="space-y-4">
                     <div>
                       <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1">Артикул моделі</label>
-                      <select 
+                      <select
                         value={newItem.case_sku}
                         onChange={(e) => setNewItem({ ...newItem, case_sku: e.target.value })}
                         className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-[var(--orange)]"
@@ -446,7 +344,7 @@ export function MasterCabinet() {
                     </div>
                     <div>
                       <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1">Планова кількість (шт)</label>
-                      <input 
+                      <input
                         type="number"
                         value={newItem.quantity}
                         onChange={(e) => setNewItem({ ...newItem, quantity: parseInt(e.target.value) || 0 })}
@@ -475,24 +373,24 @@ export function MasterCabinet() {
                   <div className="flex items-center gap-4">
                     <button onClick={() => handleQuickAdjust(task.id, task.case_sku, task.completed, -1)} disabled={isSyncing || task.completed <= 0} className="w-12 h-12 flex items-center justify-center bg-white/5 border border-white/10 rounded-xl active:bg-red-500/20 disabled:opacity-20"><Minus className="w-5 h-5 text-red-500" /></button>
                     <div className="flex-1 relative">
-                       <input 
-                         type="number" 
-                         value={localFacts[task.id] ?? ''}
-                         onChange={(e) => handleInputChange(task.id, e.target.value)}
-                         onBlur={(e) => {
-                           const val = parseInt(e.target.value);
-                           if (isNaN(val)) return;
-                           const diff = val < 0 ? val : (val - task.completed);
-                           if (diff !== 0) handleLogWork(task.id, task.case_sku, task.completed + diff, task.completed);
-                         }}
-                         className="w-full h-12 bg-black/60 border border-white/10 rounded-xl text-center text-xl font-display text-white focus:border-[var(--orange)] outline-none transition-all"
-                       />
-                       <div className="absolute -top-2 left-1/2 -translate-x-1/2 bg-[#D4AF37] text-black text-[8px] font-bold px-1.5 rounded uppercase tracking-tighter">Факт</div>
+                      <input
+                        type="number"
+                        value={localFacts[task.id] ?? ''}
+                        onChange={(e) => handleInputChange(task.id, e.target.value)}
+                        onBlur={(e) => {
+                          const val = parseInt(e.target.value);
+                          if (isNaN(val)) return;
+                          const diff = val < 0 ? val : (val - task.completed);
+                          if (diff !== 0) handleLogWork(task.id, task.case_sku, task.completed + diff, task.completed);
+                        }}
+                        className="w-full h-12 bg-black/60 border border-white/10 rounded-xl text-center text-xl font-display text-white focus:border-[var(--orange)] outline-none transition-all"
+                      />
+                      <div className="absolute -top-2 left-1/2 -translate-x-1/2 bg-[#D4AF37] text-black text-[8px] font-bold px-1.5 rounded uppercase tracking-tighter">Факт</div>
                     </div>
                     <button onClick={() => handleQuickAdjust(task.id, task.case_sku, task.completed, 1)} disabled={isSyncing} className="w-12 h-12 flex items-center justify-center bg-white/5 border border-white/10 rounded-xl active:bg-green-500/20 disabled:opacity-20"><Plus className="w-5 h-5 text-green-500" /></button>
                     <button onClick={() => handleDeleteTask(task.id)} className="w-10 h-10 flex items-center justify-center text-gray-700 hover:text-red-500 transition-colors"><Trash2 className="w-4 h-4" /></button>
                   </div>
-                  
+
                   <div className="mt-4 h-1 bg-white/5 rounded-full overflow-hidden">
                     <div className="h-full transition-all duration-500 bg-gradient-to-r from-[var(--orange)] to-yellow-500" style={{ width: `${Math.min(100, (task.completed / task.quantity) * 100)}%` }} />
                   </div>
@@ -526,7 +424,7 @@ export function MasterCabinet() {
           </div>
         )}
 
-        {/* ВКЛАДКА 3: ВІДПРАВКИ (TELEGRAM СТИЛЬ — ТОЧНА ВІДПОВІДНІСТЬ N8N) */}
+        {/* ВКЛАДКА 3: ВІДПРАВКИ */}
         {tab === 'shipments' && (
           <div className="space-y-3">
             <SectionTitle>Лог відправок готової продукції</SectionTitle>
@@ -537,81 +435,70 @@ export function MasterCabinet() {
                 .sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime())
                 .map(([date, dayData]) => {
                   const isOpen = !!openShipmentDays[date]
-                  const formattedDate = new Date(date).toLocaleDateString('uk-UA', {
-                    day: 'numeric',
-                    month: 'long',
-                    year: 'numeric'
+                  const formattedDate = new Date(date + 'T12:00:00').toLocaleDateString('uk-UA', {
+                    day: 'numeric', month: 'long', year: 'numeric'
                   })
 
-                  // Секції в чіткому порядку як в ТГ
-                  const SECTION_ORDER = ['Звичайні', 'Гравіювання', 'Туристичний', 'Бар', 'Ящик', 'Самовивіз'] as const
+                  // Порядок секцій як в ТГ, опт — після звичайних
+                  const SECTION_ORDER = [
+                    'Звичайні', 'Гравіювання', 'Туристичний', 'Бар', 'Ящик', 'Самовивіз',
+                    '⚡️ Опт — Звичайні', '⚡️ Опт — Гравіювання', '⚡️ Опт — Туристичний',
+                    '⚡️ Опт — Бар', '⚡️ Опт — Ящик', '⚡️ Опт — Самовивіз',
+                  ]
+                  const EXTRA_ORDER: Record<string, number> = {
+                    'горіх': 1, 'без лого': 2, 'х2': 3, 'чохол': 4,
+                    'шамп': 5, 'шамп 2 сторони': 6, 'грав кейс': 7, 'note': 8
+                  }
 
                   return (
                     <div key={date} className="border border-white/5 rounded-2xl overflow-hidden bg-white/5 backdrop-blur-md">
-                      {/* Шапка-кнопка дня */}
                       <button
                         onClick={() => toggleShipmentDay(date)}
                         className="w-full p-4 flex items-center justify-between bg-white/[0.02] active:bg-white/[0.05] transition-colors"
                       >
-                        <span className="font-mono text-sm font-bold text-white tracking-wide">
-                          {formattedDate}
-                        </span>
+                        <span className="font-mono text-sm font-bold text-white tracking-wide">{formattedDate}</span>
                         {isOpen ? <ChevronUp className="text-white/20" /> : <ChevronDown className="text-white/20" />}
                       </button>
 
-                      {/* Розгорнутий список — точно як в ТГ */}
                       {isOpen && (
                         <div className="px-4 pb-4 pt-3 space-y-4 bg-black/40 border-t border-white/5 animate-in slide-in-from-top-2 duration-200">
+
                           {SECTION_ORDER.map(catName => {
                             const items = dayData.categories[catName]
-                            if (!items || Object.keys(items).length === 0) return null
+                            if (!items || items.length === 0) return null
+
+                            const isOpt = catName.startsWith('⚡️')
+                            const displayName = isOpt ? catName : catName
 
                             return (
                               <div key={catName}>
-                                {/* Заголовок секції — золотий, uppercase */}
-                                <p className="text-[11px] font-bold text-[#c9963a] uppercase tracking-widest mb-1.5">
-                                  {catName}
+                                <p className={`text-[11px] font-bold uppercase tracking-widest mb-1.5 ${isOpt ? 'text-blue-400' : 'text-[#c9963a]'}`}>
+                                  {displayName}
                                 </p>
                                 <ul className="space-y-[3px]">
-                                  {Object.entries(items)
-                                    .sort((a, b) => skuSortKey(a[0]) - skuSortKey(b[0]))
-                                    .map(([key, item]) => {
-                                      // Ящик — особливий рендер
-                                      if (item.boxName !== undefined) {
-                                        const noteStr = item.boxNote ? ` (${item.boxNote})` : ''
-                                        return (
-                                          <li key={key} className="flex items-baseline gap-1.5 font-mono text-[13px]">
-                                            <span className="text-white/30">•</span>
-                                            <span className="text-white">{item.boxName}</span>
-                                            <span className="text-white/40">—</span>
-                                            <span className="text-[#4ade80] font-bold">{item.qty}</span>
-                                            {noteStr && <span className="text-white/40 text-[11px]">{noteStr}</span>}
-                                          </li>
-                                        )
-                                      }
-
-                                      // Порядок extras як в n8n
-                                      const EXTRA_ORDER: Record<string, number> = {
-                                        'горіх': 1, 'без лого': 2, 'х2': 3, 'чохол': 4,
-                                        'шамп': 5, 'шамп 2 сторони': 6, 'грав кейс': 7
-                                      }
+                                  {[...items]
+                                    .sort((a, b) => skuSortKey(a.article) - skuSortKey(b.article))
+                                    .map((item, idx) => {
+                                      // Extras — сортуємо і рендеримо
                                       const sortedExtras = Object.entries(item.extras)
-                                        .filter(([, v]) => v > 0)
-                                        .sort((a, b) => (EXTRA_ORDER[a[0]] || 99) - (EXTRA_ORDER[b[0]] || 99))
+                                        .filter(([, v]) => v && v !== 0)
+                                        .sort((a, b) => (EXTRA_ORDER[a[0]] ?? 99) - (EXTRA_ORDER[b[0]] ?? 99))
 
-                                      const parts: string[] = sortedExtras.map(([k, v]) =>
-                                        k === 'х2' ? 'х2' : `${v} ${k}`
-                                      )
-                                      if (item.pickupTime) parts.push(item.pickupTime)
+                                      const parts: string[] = sortedExtras.map(([k, v]) => {
+                                        if (k === 'х2') return 'х2'
+                                        if (k === 'note') return String(v)
+                                        return `${v} ${k}`
+                                      })
+                                      if (item.pickup_time) parts.push(item.pickup_time)
 
                                       const extrasStr = parts.length > 0 ? ` (${parts.join(', ')})` : ''
 
                                       return (
-                                        <li key={key} className="flex items-baseline gap-1.5 font-mono text-[13px]">
+                                        <li key={idx} className="flex items-baseline gap-1.5 font-mono text-[13px]">
                                           <span className="text-white/30">•</span>
-                                          <span className="text-white font-medium">{key}</span>
+                                          <span className="text-white font-medium">{item.article}</span>
                                           <span className="text-white/40">—</span>
-                                          <span className="text-[#4ade80] font-bold">{item.qty}</span>
+                                          <span className="text-[#4ade80] font-bold">{item.quantity}</span>
                                           {extrasStr && (
                                             <span className="text-white/50 text-[11px]">{extrasStr}</span>
                                           )}
@@ -623,7 +510,7 @@ export function MasterCabinet() {
                             )
                           })}
 
-                          {/* Футер — Разом + Пильник (як в ТГ) */}
+                          {/* Футер */}
                           <div className="pt-2 border-t border-white/5 space-y-0.5">
                             <div className="flex justify-between items-center">
                               <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Підсумок дня:</span>
@@ -635,6 +522,7 @@ export function MasterCabinet() {
                               </div>
                             )}
                           </div>
+
                         </div>
                       )}
                     </div>
@@ -686,7 +574,7 @@ export function MasterCabinet() {
                   {isOpen && (
                     <div className="p-3 space-y-3 animate-in slide-in-from-top-2 duration-300">
                       {catItems.length === 0 ? <div className="text-center py-6 text-white/20 text-sm italic">Немає даних</div> :
-                        catItems.sort((a,b) => a.sku.localeCompare(b.sku)).map(item => (
+                        catItems.sort((a, b) => a.sku.localeCompare(b.sku)).map(item => (
                           <Card key={item.sku} className="bg-white/[0.03] border-white/5">
                             <div className="p-3 flex items-center justify-between gap-4">
                               <div className="flex flex-col">
@@ -730,7 +618,7 @@ export function MasterCabinet() {
                 <AlertTriangle className="text-[var(--orange)] w-4 h-4" /> Редагувати лог
               </h3>
               <p className="text-xs text-[var(--text-dim)] font-mono mb-4 uppercase">{editingLog.item_code}</p>
-              <input 
+              <input
                 type="number"
                 value={newQuantity}
                 onChange={(e) => setNewQuantity(parseFloat(e.target.value) || 0)}

@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Scale, Box, History, Clock } from 'lucide-react'
+import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Box, History, ShieldCheck, Users, Settings } from 'lucide-react'
 
 interface NavItem {
   path: string
@@ -11,19 +11,25 @@ interface NavItem {
 }
 
 const COMMON_ITEMS: NavItem[] = [
-  { path: '/',          icon: Home, label: 'Головна',  roles: ['admin','driver'] },
-  { path: '/warehouse', icon: Package, label: 'Склад',    roles: ['admin','driver'], badge: 2 },
-  { path: '/tasks',     icon: Hammer, label: 'Завдання', roles: ['admin'] },
-  { path: '/tasker',    icon: Truck, label: 'Таскер',   roles: ['admin','driver'],          badge: 1 },
-  { path: '/salary',    icon: Banknote, label: 'Зарплата', roles: ['admin'] },
+  { path: '/',          icon: Home, label: 'Головна',  roles: ['driver'] },
+  { path: '/warehouse', icon: Package, label: 'Склад',    roles: ['driver'], badge: 2 },
+  { path: '/tasker',    icon: Truck,   label: 'Таскер',   roles: ['driver'], badge: 1 },
 ]
 
 const MASTER_ITEMS: NavItem[] = [
-  { path: '/master',             icon: BarChart3, label: 'Дашборд', roles: ['master'] },
-  { path: '/master?tab=stats',     icon: History,   label: 'Історія',   roles: ['master'] },
-  { path: '/master?tab=shipments', icon: Truck,     label: 'Відправки', roles: ['master'] },
-  { path: '/master?tab=defects',   icon: AlertTriangle, label: 'Брак',     roles: ['master'] },
-  { path: '/master?tab=balance',   icon: Box,       label: 'Баланс',    roles: ['master'] },
+  { path: '/master',               icon: BarChart3,     label: 'Дашборд', roles: ['master'] },
+  { path: '/master?tab=stats',     icon: History,       label: 'Історія',roles: ['master'] },
+  { path: '/master?tab=shipments', icon: Truck,         label: 'Відправки',roles: ['master'] },
+  { path: '/master?tab=defects',   icon: AlertTriangle, label: 'Брак',    roles: ['master'] },
+  { path: '/master?tab=balance',   icon: Box,           label: 'Баланс',  roles: ['master'] },
+]
+
+const ADMIN_ITEMS: NavItem[] = [
+  { path: '/admin?tab=dashboard',  icon: BarChart3, label: 'Дашборд', roles: ['admin'] },
+  { path: '/admin?tab=warehouses', icon: Package,   label: 'Склади',  roles: ['admin'] },
+  { path: '/admin?tab=tasker',     icon: Truck,     label: 'Таскер',  roles: ['admin'] },
+  { path: '/admin?tab=masters',    icon: Users,     label: 'Персонал',roles: ['admin'] },
+  { path: '/admin?tab=system',     icon: Settings,  label: 'Система', roles: ['admin'] },
 ]
 
 export function BottomNav() {
@@ -37,14 +43,25 @@ export function BottomNav() {
     </div>
   }
 
-  const items = user.role === 'master' ? MASTER_ITEMS : COMMON_ITEMS.filter(i => i.roles.includes(user.role))
+  let items: NavItem[] = []
+  if (user.role === 'admin') {
+    items = ADMIN_ITEMS
+  } else if (user.role === 'master') {
+    items = MASTER_ITEMS
+  } else {
+    items = COMMON_ITEMS.filter(i => i.roles.includes(user.role))
+  }
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-surface border-t border-border z-50 flex shadow-[0_-4px_10px_rgba(0,0,0,0.3)]"
+    <nav className="fixed bottom-0 left-0 right-0 bg-[#0a0a0a] border-t border-white/5 z-50 flex shadow-[0_-4px_10px_rgba(0,0,0,0.3)]"
          style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
       {items.map(item => {
         const fullPath = item.path
-        const active = (pathname + search) === fullPath || (pathname === '/' && item.path === '/')
+        let active = (pathname + search) === fullPath || (pathname === '/' && item.path === '/')
+        
+        // Handle default tabs logic
+        if (pathname === '/admin' && !search && item.path === '/admin?tab=dashboard') active = true
+        if (pathname === '/master' && !search && item.path === '/master') active = true
         
         return (
           <button

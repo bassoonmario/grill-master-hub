@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, DashboardData, Shipment, Defect } from '@/lib/api'
 import { StatCard, SectionTitle, ProgressBar, AlertBanner, Spinner } from '@/components/UI'
+import { Target, RefreshCw, Truck, AlertTriangle } from 'lucide-react'
 
 type Tab = 'main' | 'shipments' | 'defects'
 
@@ -10,8 +11,8 @@ export function Dashboard() {
   const [shipments, setShipments] = useState<Shipment[]>([])
   const [defects, setDefects] = useState<Defect[]>([])
 
-  useEffect(() => { 
-    api.dashboard().then(setData) 
+  useEffect(() => {
+    api.dashboard().then(setData)
   }, [])
 
   useEffect(() => {
@@ -31,102 +32,102 @@ export function Dashboard() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-3 text-sm font-bold uppercase tracking-wider transition-colors font-display ${
-              activeTab === tab 
-                ? 'text-[var(--orange)] border-b-2 border-[var(--orange)]' 
-                : 'text-[var(--text-dim)] hover:text-[var(--orange)]'
-            }`}
+            className={`flex-1 py-3 text-sm font-bold uppercase tracking-wider text-center border-b-2 transition-all ${activeTab === tab
+                ? 'border-[var(--orange)] text-[var(--orange)] bg-white/[0.02]'
+                : 'border-transparent text-[var(--text-dim)] hover:text-[var(--text)]'
+              }`}
           >
-            {tab === 'main' ? 'Головна' : tab === 'shipments' ? 'Відправки' : 'Брак'}
+            {tab === 'main' && '📊 Головна'}
+            {tab === 'shipments' && '🚚 Відправки'}
+            {tab === 'defects' && '⚠️ Брак продукції'}
           </button>
         ))}
       </div>
 
-      {/* ГІЛКА "ГОЛОВНА" — ПОВНІСТЮ ОРИГІНАЛЬНИЙ КОД ДАШБОРДУ */}
       {activeTab === 'main' && (
-        <>
-          {/* Alerts */}
-          {data.alerts.map((a, i) => <AlertBanner key={i} text={a.text} level={a.level} />)}
+        <div className="space-y-6 animate-fadeIn">
+          {data.alerts && data.alerts.length > 0 && (
+            <div className="space-y-2">
+              {data.alerts.map((alert, idx) => (
+                <AlertBanner key={idx} text={alert.text} level={alert.level} />
+              ))}
+            </div>
+          )}
 
-          {/* Cycle progress */}
-          <SectionTitle>Поточний цикл #{data.cycle_id}</SectionTitle>
-          <ProgressBar
-            pct={pct}
-            label="Виконання плану"
-            subleft={`${data.plan_done} / ${data.plan_total} виробів`}
-            subright={`${data.days_left} днів залишилось`}
-          />
+          {/* Картки статистики строго за пропсами з UI.tsx */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard icon={<Target className="w-4 h-4" />} value={`${data.plan_done}/${data.plan_total}`} label="План циклу" accent="orange" />
+            <StatCard icon={<RefreshCw className="w-4 h-4" />} value={data.done_today} label="Зроблено сьогодні" accent="green" />
+            <StatCard icon={<Truck className="w-4 h-4" />} value={data.shipped} label="Відправлено" accent="orange" />
+            <StatCard icon={<AlertTriangle className="w-4 h-4" />} value={data.in_progress} label="В процесі" accent="yellow" />
+          </div>
 
-          {/* Stats */}
-          <SectionTitle>Показники</SectionTitle>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <StatCard icon="🏭" value={data.done_today}  label="Готово сьогодні" accent="orange" />
-            <StatCard icon="✅" value={data.shipped}     label="Відвантажено"   accent="green"  />
-            <StatCard icon="⏳" value={data.in_progress} label="В роботі"       accent="yellow" />
-            <StatCard icon="❌" value={data.defects}     label="Брак"           accent="red"    />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="md:col-span-2 bg-surface border border-border p-5 rounded-xl flex flex-col justify-between">
+              <div>
+                <SectionTitle>Прогрес виконання плану</SectionTitle>
+                <div className="text-4xl font-black mt-2 mb-4 text-[var(--orange)] font-display">{pct}%</div>
+                <ProgressBar pct={pct} label="виконання плану" subleft={`Залишилось днів: ${data.days_left}`} subright={`Залишилось виробів: ${data.plan_total - data.plan_done}`} />
+              </div>
+            </div>
 
-            {/* Wide salary card */}
-            <div className="col-span-2 bg-surface border border-border rounded-xl p-4 relative overflow-hidden">
-              <div className="absolute top-0 left-0 right-0 h-0.5 bg-[var(--orange)] opacity-60" />
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-2xl block mb-2">💰</span>
-                  <div className="font-display text-4xl text-[var(--orange)] leading-none">
-                    {data.salary_base.toLocaleString('uk-UA')}
-                  </div>
-                  <div className="font-mono text-[11px] text-[var(--text-dim)] tracking-wide mt-1">
-                    Заробіток за цикл, грн
-                  </div>
+            <div className="bg-surface border border-border p-5 rounded-xl">
+              <SectionTitle>Фінансовий баланс</SectionTitle>
+              <div className="space-y-4 mt-4">
+                <div className="flex justify-between items-center bg-black/30 p-3 rounded-lg border border-border/30">
+                  <span className="text-xs font-mono uppercase text-[var(--text-dim)]">Базова ставка</span>
+                  <span className="text-lg font-bold font-display text-white">{data.salary_base} ₴</span>
                 </div>
-                <div className="text-right">
-                  <div className="font-mono text-[11px] text-[var(--text-dim)] mb-1">базова</div>
-                  <div className="font-display text-2xl text-[var(--green)]">+{data.salary_bonus.toLocaleString('uk-UA')}</div>
-                  <div className="text-[11px] text-[var(--text-dim)]">премія</div>
+                <div className="flex justify-between items-center bg-black/30 p-3 rounded-lg border border-border/30">
+                  <span className="text-xs font-mono uppercase text-[var(--text-dim)]">Бонуси / Премії</span>
+                  <span className="text-lg font-bold font-display text-[var(--green)]">+{data.salary_bonus} ₴</span>
+                </div>
+                <div className="pt-2 border-t border-border flex justify-between items-center">
+                  <span className="text-sm font-bold uppercase tracking-wider text-[var(--text)]">Загалом нараховано</span>
+                  <span className="text-2xl font-black font-display text-[var(--orange)]">{data.salary_base + data.salary_bonus} ₴</span>
                 </div>
               </div>
             </div>
           </div>
-          {/* Tasks */}
-          <SectionTitle>Завдання на сьогодні</SectionTitle>
-          <div className="flex flex-col gap-2.5">
-            {data.tasks.map(task => (
-              <div key={task.id}
-                   className="bg-surface border border-border rounded-xl px-4 py-3 flex items-center gap-3.5 active:bg-surface2 transition-colors cursor-pointer">
-                <TaskDot status={task.status} />
-                <div className="flex-1">
-                  <div className="text-sm font-medium">{task.name}</div>
-                  <div className="font-mono text-[11px] text-[var(--text-dim)] mt-0.5">
-                    {task.stage} → {task.status === 'done' ? 'готово' : task.status === 'active' ? 'в роботі' : 'очікує'}
-                  </div>
-                </div>
-                <div className="font-display text-xl"
-                     style={{ color: task.status === 'done' ? 'var(--green)' : task.status === 'active' ? 'var(--orange)' : 'var(--text-dim)' }}>
-                  {task.fact}
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
+        </div>
       )}
 
-      {/* ГІЛКА "ВІДПРАВКИ" */}
       {activeTab === 'shipments' && (
-        <div className="bg-surface border border-border rounded-xl p-4">
-          <SectionTitle>Списки відправок</SectionTitle>
-          <div className="flex flex-col gap-2 mt-2">
+        <div className="bg-surface border border-border p-5 rounded-xl animate-fadeIn">
+          <SectionTitle>Останні логовані відправки</SectionTitle>
+          <div className="mt-4 divide-y divide-border">
             {shipments.length === 0 ? (
-              <div className="text-sm text-[var(--text-dim)] italic py-2">Списки відправок порожні</div>
+              <div className="text-sm text-[var(--text-dim)] italic py-2">Записів про відправки не виявлено</div>
             ) : (
-              shipments.map(s => (
-                <div key={s.id} className="py-2.5 border-b border-border last:border-0 text-[var(--text-dim)] text-sm">
-                  <div className="flex justify-between font-medium text-[var(--text)]">
-                    <span>📅 {new Date(s.shipment_date).toLocaleDateString('uk-UA')} | Артикул: <span className="text-[var(--orange)]">{s.article}</span></span>
-                    <span className="font-display text-lg text-[var(--green)]">{s.quantity} шт</span>
+              shipments.map((s, idx) => (
+                <div key={idx} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-sm">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[11px] text-[var(--text-dim)]">📅 {s.report_date}</span>
+                      <span className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded ${s.is_wholesale ? 'bg-amber-950 text-amber-400 border border-amber-800/30' : 'bg-zinc-800 text-zinc-300'
+                        }`}>
+                        {s.is_wholesale ? '⚡️ Опт' : 'Роздріб'}
+                      </span>
+                      <span className="text-zinc-500 font-mono text-[11px]">| {s.category}</span>
+                    </div>
+                    <div className="text-white font-bold mt-0.5">
+                      {s.article} <span className="text-[var(--text-dim)] font-normal text-xs">({s.quantity} шт.)</span>
+                    </div>
+                    {s.extras && Object.keys(s.extras).length > 0 && (
+                      <div className="text-[11px] text-[var(--text-dim)] font-mono mt-1 bg-black/20 p-1.5 rounded border border-border/30">
+                        {Object.entries(s.extras).map(([key, val]) => (
+                          <span key={key} className="mr-3 inline-block">
+                            🔧 {key}: <span className="text-zinc-300">{String(val)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <div className="text-[11px] font-mono mt-1 flex gap-2">
-                    <span>{s.is_engraved ? '🎨 З гравіруванням' : '🔲 Без гравірування'}</span>
-                  </div>
-                  {s.raw_comment && <div className="text-[11px] italic mt-0.5 text-[var(--text-dim)]">💬 {s.raw_comment}</div>}
+                  {s.pickup_time && (
+                    <div className="text-xs font-mono bg-orange-950/40 text-[var(--orange)] border border-orange-900/30 px-2 py-1 rounded self-start sm:self-center">
+                      🕒 Самовивіз: {s.pickup_time}
+                    </div>
+                  )}
                 </div>
               ))
             )}
@@ -134,11 +135,10 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* ГІЛКА "БРАК" */}
       {activeTab === 'defects' && (
-        <div className="bg-surface border border-border rounded-xl p-4">
-          <SectionTitle>Облік внутрішнього браку</SectionTitle>
-          <div className="flex flex-col gap-2 mt-2">
+        <div className="bg-surface border border-border p-5 rounded-xl animate-fadeIn">
+          <SectionTitle>Журнал реєстрації браку</SectionTitle>
+          <div className="mt-4 divide-y divide-border">
             {defects.length === 0 ? (
               <div className="text-sm text-[var(--text-dim)] italic py-2">Записів про брак не виявлено</div>
             ) : (
@@ -146,9 +146,8 @@ export function Dashboard() {
                 <div key={d.id} className="py-2.5 border-b border-border last:border-0 text-[var(--text-dim)] text-sm">
                   <div className="flex justify-between font-medium text-[var(--text)]">
                     <span>📅 {new Date(d.defect_date).toLocaleDateString('uk-UA')} | СКУ: <span className="text-[var(--orange)]">{d.sku}</span></span>
-                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wide font-mono ${
-                      d.status === 'fixed' ? 'bg-emerald-950 text-[var(--green)]' : 'bg-rose-950 text-red-400'
-                    }`}>{d.status}</span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wide font-mono ${d.status === 'fixed' ? 'bg-emerald-950 text-[var(--green)]' : 'bg-rose-950 text-red-400'
+                      }`}>{d.status}</span>
                   </div>
                   <div className="text-[11px] font-mono mt-1">Тип виробу: {d.item_type}</div>
                   <div className="text-[11px] mt-0.5 text-[var(--text-dim)]">⚠️ Причина: {d.reason}</div>
@@ -160,10 +159,4 @@ export function Dashboard() {
       )}
     </div>
   )
-}
-function TaskDot({ status }: { status: 'done' | 'active' | 'pending' }) {
-  const base = "w-2.5 h-2.5 rounded-full flex-shrink-0"
-  if (status === 'done')    return <div className={`${base} bg-[var(--green)]`} />
-  if (status === 'active')  return <div className={`${base} bg-[var(--orange)] animate-blink`} />
-  return <div className={`${base} bg-border`} />
 }

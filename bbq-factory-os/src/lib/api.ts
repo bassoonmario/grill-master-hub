@@ -1,5 +1,5 @@
 // ─── API BASE ─────────────────────────────────────────────────────────────────
-const BASE = import.meta.env.VITE_API_URL ?? 
+const BASE = import.meta.env.VITE_API_URL ??
   (typeof window !== 'undefined' && window.location.hostname === 'test.wowusik.duckdns.org'
     ? `${window.location.protocol}//api-test.wowusik.duckdns.org`
     : '')
@@ -25,6 +25,19 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return res.json()
 }
 
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${localStorage.getItem('token') ?? ''}`
+    },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) throw new Error(`API error ${res.status}`)
+  return res.json()
+}
+
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 export interface DashboardData {
   cycle_id: string
@@ -38,7 +51,7 @@ export interface DashboardData {
   salary_bonus: number
   days_left: number
   alerts: { text: string; level: 'warning' | 'critical' }[]
-  tasks: { id: any; name: string; stage: string; status: 'done'|'active'|'pending'; fact: number; plan: number }[]
+  tasks: { id: any; name: string; stage: string; status: 'done' | 'active' | 'pending'; fact: number; plan: number }[]
 }
 
 export interface StockItem {
@@ -48,7 +61,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative' | 'cases'
+  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main'
 }
 
 export interface Task {
@@ -84,12 +97,12 @@ export interface MasterDashboard {
   potential_earnings: number
   current_earnings: number
   cycle: string
-  tasks: { 
+  tasks: {
     id: number
     case_sku: string
     quantity: number
     completed: number
-    is_priority: boolean 
+    is_priority: boolean
   }[]
 }
 
@@ -107,13 +120,13 @@ export interface MasterLog {
 }
 
 export interface Shipment {
-  id: number
-  shipment_date: string
+  report_date: string
+  category: 'Звичайні' | 'Гравіювання' | 'Туристичний' | 'Бар' | 'Ящик' | 'Самовивіз' | 'Пильник'
   article: string
   quantity: number
-  is_engraved: boolean
-  raw_comment: string
-  is_case: boolean
+  extras: Record<string, number | string>
+  pickup_time: string | null
+  is_wholesale: boolean
 }
 
 export interface Defect {
@@ -125,6 +138,38 @@ export interface Defect {
   status: string
 }
 
+export interface GlobalStat {
+  master_name: string
+  earn_1_15: number
+  earn_16_end: number
+  total: number
+}
+
+export interface NotificationAlert {
+  source: string
+  item_id: string
+  quantity: number
+  limit_val: number
+}
+
+export interface IncomingTask {
+  id: number
+  item_id: string
+  target_qty: number
+  actual_qty: number | null
+  status: string
+  created_at: string
+  completed_at: string | null
+  driver_comment: string | null
+  admin_comment: string | null
+  is_simple: boolean
+}
+
+export interface PackagingRules {
+  pcs_per_pack: number
+  packs_per_box: number
+}
+
 // ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
@@ -133,7 +178,7 @@ export const api = {
     return {
       cycle_id: d.cycle ?? '-',
       plan_total: d.tasks?.reduce((s: number, t: any) => s + (t.plan ?? 0), 0) ?? 0,
-      plan_done:  d.tasks?.reduce((s: number, t: any) => s + (t.fact ?? 0), 0) ?? 0,
+      plan_done: d.tasks?.reduce((s: number, t: any) => s + (t.fact ?? 0), 0) ?? 0,
       done_today: d.done_today ?? 0,
       shipped: d.shipped_today ?? 0,
       in_progress: d.in_progress ?? 0,
@@ -147,7 +192,7 @@ export const api = {
   },
 
   stock: async (): Promise<StockItem[]> => {
-    const data = await get<any[]>('/api/stock');
+    const data = await get<any[]>('/api/stock')
     return data.map((item: any, index: number) => ({
       id: item.item_id || index,
       sku: String(item.item_id),
@@ -156,7 +201,7 @@ export const api = {
       unit: 'од',
       status: item.status,
       category: item.category === 'finished' ? 'ready' : item.category
-    })) as StockItem[];
+    })) as StockItem[]
   },
 
   tasks: async (): Promise<Task[]> => {
@@ -208,7 +253,7 @@ export const api = {
     post('/api/tasker/confirm', { id }).catch(() => console.log('demo mode')),
 
   // ─── MASTER CABINET API ─────────────────────────────────────────────────────
-  
+
   getMasterDashboard: (masterName: string): Promise<MasterDashboard> =>
     get<MasterDashboard>(`/api/master/dashboard?master_name=${encodeURIComponent(masterName)}`),
 
@@ -216,7 +261,7 @@ export const api = {
     post('/api/master/tasks', { master_name: masterName, case_sku: caseSku, quantity }),
 
   deleteMasterTask: (taskId: number) =>
-    fetch(`${BASE}/api/master/tasks/${taskId}`, { 
+    fetch(`${BASE}/api/master/tasks/${taskId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
     }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
@@ -236,9 +281,9 @@ export const api = {
   updateMasterLog: (logId: number, quantity: number) =>
     fetch(`${BASE}/api/master/logs/${logId}`, {
       method: 'PUT',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` 
+        Authorization: `Bearer ${localStorage.getItem('token') ?? ''}`
       },
       body: JSON.stringify({ quantity })
     }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
@@ -249,10 +294,44 @@ export const api = {
       headers: { Authorization: `Bearer ${localStorage.getItem('token') ?? ''}` }
     }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
 
-  // ─── NEW METHODS ────────────────────────────────────────────────────────────
   getShipments: (): Promise<Shipment[]> =>
     get<Shipment[]>('/api/master/shipments'),
 
   getDefects: (): Promise<Defect[]> =>
     get<Defect[]>('/api/master/defects'),
+
+  // ─── ADMIN API ──────────────────────────────────────────────────────────────
+  getGlobalStats: (): Promise<GlobalStat[]> =>
+    get<GlobalStat[]>('/api/admin/masters/global-stats'),
+
+  getNotifications: (): Promise<NotificationAlert[]> =>
+    get<NotificationAlert[]>('/api/notifications?role=admin'),
+
+  createIncomingTask: (body: {
+    task_type: 'supply' | 'internal' | 'simple'
+    item_id?: string
+    target_qty?: number
+    admin_comment?: string
+    pcs_per_pack?: number
+    packs_per_box?: number
+  }) => post<{ status: string; id: number }>('/api/tasks/incoming', body),
+
+  getIncomingTasks: (statusFilter?: string): Promise<IncomingTask[]> =>
+    get<IncomingTask[]>(`/api/admin/incoming-tasks${statusFilter ? `?status_filter=${statusFilter}` : ''}`),
+
+  getPackagingRules: (itemId: string): Promise<PackagingRules> =>
+    get<PackagingRules>(`/api/admin/packaging-rules/${encodeURIComponent(itemId)}`),
+
+  updateIncomingTaskStatus: (taskId: number, status: string) =>
+    patch<{ status: string }>(`/api/admin/incoming-tasks/${taskId}/status`, { status }),
+
+  updateInventory: (tableKey: string, itemId: string, newQuantity: number) =>
+    fetch(`${BASE}/api/admin/inventory`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token') ?? ''}`
+      },
+      body: JSON.stringify({ table_key: tableKey, item_id: itemId, new_quantity: newQuantity })
+    }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
 }

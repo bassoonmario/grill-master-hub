@@ -13,7 +13,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Top bar */}
       <header className="sticky top-0 z-40 bg-surface border-b border-border flex items-center justify-between px-5 py-3">
         <div className="flex items-center gap-2.5">
-          <span className="font-display text-[22px] tracking-widest text-[var(--orange)]">BBQ OS</span>
+          <span className="font-display text-[22px] tracking-widest text-[var(--orange)]">Grills Factory</span>
           <span className="font-mono text-[10px] px-2 py-1 rounded-full bg-[var(--orange-dim)] border border-[var(--orange-mid)] text-[var(--orange)] tracking-wider">
             ЦИКЛ {12}
           </span>
