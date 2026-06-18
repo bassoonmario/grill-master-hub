@@ -85,7 +85,10 @@ export function MasterCabinet() {
       setShipments(parsedShipments)
       setDefects(df)
 
-      const filtered = stock.filter(i => i.category === 'ready' || i.category === 'cases')
+      const filtered = stock.filter(i => 
+        i.category === 'ready' || 
+        i.category === 'cases_empty'
+      )
       const grouped = filtered.reduce((acc, item) => {
         const cleanSku = item.sku.trim()
         if (!acc[cleanSku]) {
@@ -98,7 +101,7 @@ export function MasterCabinet() {
           }
         }
         if (item.category === 'ready') acc[cleanSku].ready = item.qty
-        if (item.category === 'cases') acc[cleanSku].cases = item.qty
+        if (item.category === 'cases_empty') acc[cleanSku].cases = item.qty
         return acc
       }, {} as Record<string, UnifiedStock>)
 

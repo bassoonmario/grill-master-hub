@@ -61,7 +61,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main'
+  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished'
 }
 
 export interface Task {
