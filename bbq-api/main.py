@@ -560,6 +560,24 @@ async def get_items():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/items/main")
+async def get_items_main():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_main ORDER BY item_id")
+        return [r['item_id'] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/items/operative")
+async def get_items_operative():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_operative ORDER BY item_id")
+        return [r['item_id'] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/admin/masters/global-stats")
 async def get_admin_global_stats():
     p = await get_pool()

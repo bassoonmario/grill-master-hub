@@ -38,22 +38,27 @@ export function AdminTasker() {
     }
   }, [])
 
-  const loadItems = useCallback(async () => {
+  const loadItems = useCallback(async (type: TaskType = taskType) => {
     try {
-      const data = await api.getItems()
+      let data: string[]
+      if (type === 'internal') {
+        data = await api.getItemsOperative()
+      } else {
+        data = await api.getItemsMain()
+      }
       setItemsList(data || [])
     } catch (e) {
       console.error(e)
     }
-  }, [])
+  }, [taskType])
 
   useEffect(() => {
     if (tab === 'create') {
       loadItems()
     } else if (tab === 'active') {
       loadTasks()
-    } else if (tab === 'archive') {
-      loadTasks('архів')
+    }
+  }, [tab, taskType])
     }
   }, [tab, loadTasks, loadItems])
 
@@ -151,8 +156,8 @@ export function AdminTasker() {
   ]
 
   const taskTypeOptions: { key: TaskType; label: string; icon: React.ReactNode }[] = [
-    { key: 'supply', label: 'Поставка', icon: <Package className="w-4 h-4" /> },
-    { key: 'internal', label: 'Внутрішня', icon: <Send className="w-4 h-4" /> },
+    { key: 'supply', label: 'Основний', icon: <Package className="w-4 h-4" /> },
+    { key: 'internal', label: 'Майстерня', icon: <Send className="w-4 h-4" /> },
     { key: 'simple', label: 'Текстова', icon: <MessageSquare className="w-4 h-4" /> },
   ]
 

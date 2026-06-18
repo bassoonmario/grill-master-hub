@@ -275,6 +275,12 @@ export const api = {
   getItems: (): Promise<string[]> =>
     get<string[]>('/api/items'),
 
+  getItemsMain: (): Promise<string[]> =>
+    get<string[]>('/api/items/main'),
+
+  getItemsOperative: (): Promise<string[]> =>
+    get<string[]>('/api/items/operative'),
+
   getMasterLogs: (masterName: string): Promise<MasterLog[]> =>
     get<MasterLog[]>(`/api/master/logs?master_name=${encodeURIComponent(masterName)}`),
 
