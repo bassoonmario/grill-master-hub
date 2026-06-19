@@ -165,6 +165,18 @@ export interface IncomingTask {
   is_simple: boolean
 }
 
+export interface DriverTask {
+  id: number
+  item_id: string
+  target_qty: number
+  actual_qty: number
+  status: string
+  admin_comment: string | null
+  driver_comment: string | null
+  is_simple: boolean
+  created_at: string
+}
+
 export interface PackagingRules {
   pcs_per_pack: number
   packs_per_box: number
@@ -340,4 +352,17 @@ export const api = {
       },
       body: JSON.stringify({ table_key: tableKey, item_id: itemId, new_quantity: newQuantity })
     }).then(res => { if (!res.ok) throw new Error(); return res.json(); }),
+
+  // ─── DRIVER API ─────────────────────────────────────────────────────────────
+  getDriverTasks: (): Promise<DriverTask[]> =>
+    get<DriverTask[]>('/api/driver/tasks'),
+
+  deliverTask: (taskId: number, destination: 'main' | 'operative', qty: number) =>
+    post<{ status: string; total_delivered: number; task_status: string }>(
+      `/api/driver/tasks/${taskId}/deliver`,
+      { task_id: taskId, destination, qty }
+    ),
+
+  completeSimpleTask: (taskId: number) =>
+    post<{ status: string }>(`/api/tasks/incoming/${taskId}/complete`, {}),
 }

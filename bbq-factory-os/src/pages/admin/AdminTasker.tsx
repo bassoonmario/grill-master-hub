@@ -58,8 +58,6 @@ export function AdminTasker() {
     } else if (tab === 'active') {
       loadTasks()
     }
-  }, [tab, taskType])
-    }
   }, [tab, loadTasks, loadItems])
 
   const loadPackaging = useCallback(async (itemId: string) => {

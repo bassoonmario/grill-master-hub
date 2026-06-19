@@ -131,6 +131,11 @@ class InventoryUpdate(BaseModel):
     item_id: str
     new_quantity: int
 
+class TaskDelivery(BaseModel):
+    task_id: int
+    destination: str  # 'main' або 'operative'
+    qty: int
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -560,24 +565,6 @@ async def get_items():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/items/main")
-async def get_items_main():
-    p = await get_pool()
-    try:
-        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_main ORDER BY item_id")
-        return [r['item_id'] for r in rows]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/items/operative")
-async def get_items_operative():
-    p = await get_pool()
-    try:
-        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_operative ORDER BY item_id")
-        return [r['item_id'] for r in rows]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/api/admin/masters/global-stats")
 async def get_admin_global_stats():
     p = await get_pool()
@@ -807,4 +794,99 @@ async def update_admin_inventory(body: InventoryUpdate):
         raise
     except Exception as e:
         print(f"Error in PATCH /api/admin/inventory: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/driver/tasks")
+async def get_driver_tasks():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, item_id, target_qty, actual_qty, status, admin_comment, 
+                   driver_comment, is_simple, created_at
+            FROM bot_workshop.incoming_tasks
+            WHERE status IN ('очікується', 'в роботі')
+            ORDER BY created_at ASC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/driver/tasks/{task_id}/deliver")
+async def deliver_task(task_id: int, body: TaskDelivery):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                # Записуємо рядок доставки
+                await conn.execute("""
+                    INSERT INTO bot_workshop.task_deliveries (task_id, item_id, destination, qty, delivered_at)
+                    VALUES ($1, (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $1), $2, $3, CURRENT_TIMESTAMP)
+                """, task_id, body.destination, body.qty)
+
+                # Оновлюємо залишки у відповідній таблиці
+                if body.destination == 'main':
+                    await conn.execute("""
+                        UPDATE bot_workshop.inventory_main
+                        SET quantity = quantity + $1, last_update = CURRENT_TIMESTAMP
+                        WHERE item_id = (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $2)
+                    """, body.qty, task_id)
+                elif body.destination == 'operative':
+                    await conn.execute("""
+                        UPDATE bot_workshop.inventory_operative
+                        SET quantity = quantity + $1
+                        WHERE item_id = (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $2)
+                    """, body.qty, task_id)
+
+                # Рахуємо суму всіх доставок по тасці
+                total = await conn.fetchval("""
+                    SELECT COALESCE(SUM(qty), 0) FROM bot_workshop.task_deliveries WHERE task_id = $1
+                """, task_id)
+
+                target = await conn.fetchval("""
+                    SELECT target_qty FROM bot_workshop.incoming_tasks WHERE id = $1
+                """, task_id)
+
+                # Якщо сума доставок досягла планової кількості — закриваємо таску
+                new_status = 'прийнято' if total >= target else 'в роботі'
+                await conn.execute("""
+                    UPDATE bot_workshop.incoming_tasks
+                    SET actual_qty = $1, status = $2,
+                        completed_at = CASE WHEN $2 = 'прийнято' THEN CURRENT_TIMESTAMP ELSE completed_at END
+                    WHERE id = $3
+                """, total, new_status, task_id)
+
+        return {"status": "ok", "total_delivered": total, "task_status": new_status}
+    except Exception as e:
+        print(f"Error in deliver_task: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/items/main")
+async def get_items_main():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_main ORDER BY item_id")
+        return [r['item_id'] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/items/operative")
+async def get_items_operative():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("SELECT DISTINCT item_id FROM bot_workshop.inventory_operative ORDER BY item_id")
+        return [r['item_id'] for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tasks/incoming/{task_id}/complete")
+async def complete_simple_task(task_id: int):
+    p = await get_pool()
+    try:
+        await p.execute("""
+            UPDATE bot_workshop.incoming_tasks
+            SET status = 'прийнято', completed_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND is_simple = true
+        """, task_id)
+        return {"status": "ok"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
