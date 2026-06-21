@@ -300,7 +300,9 @@ function DeliveryTaskCard({
   task: DriverTask; onRefresh: () => void; isDone: boolean
 }) {
   const [open, setOpen]               = useState(false)
-  const [destination, setDest]        = useState<'main' | 'operative'>('main')
+  const [destination, setDest]        = useState<'main' | 'operative'>(
+    task.task_type === 'internal' ? 'operative' : 'main'
+  )
   const [qty, setQty]                 = useState('')
   const [loading, setLoading]         = useState(false)
   const [err, setErr]                 = useState<string | null>(null)
@@ -308,17 +310,40 @@ function DeliveryTaskCard({
   const [actualPcs, setActualPcs]     = useState('')
   const [actualPacks, setActualPacks] = useState('')
 
-  const plannedPcs   = task.pcs_per_pack  ?? 0
-  const plannedPacks = task.packs_per_box ?? 0
-  const hasPlanned   = plannedPcs > 0 || plannedPacks > 0
+  const plannedPcs      = task.pcs_per_pack  ?? 0
+  const plannedPacks    = task.packs_per_box ?? 0
+  const plannedPcsPerBox = task.pcs_per_box  ?? 0
+  const hasPlanned      = plannedPcs > 0 || plannedPacks > 0 || plannedPcsPerBox > 0
+
+  const displayUnit = (plannedPacks > 0 || plannedPcsPerBox > 0) ? 'boxes' : plannedPcs > 0 ? 'packs' : 'units'
+  const unitLabel   = displayUnit === 'boxes' ? 'ящики' : displayUnit === 'packs' ? 'пачки' : 'шт'
+
+  const calcUnits = (inputVal: string): number => {
+    const n = parseInt(inputVal, 10)
+    if (!n || n <= 0) return 0
+    if (displayUnit === 'boxes') {
+      if (plannedPcsPerBox > 0) {
+        const pcsBox = useCustomPack ? (parseInt(actualPcs, 10) || plannedPcsPerBox) : plannedPcsPerBox
+        return n * pcsBox
+      }
+      const pcs   = useCustomPack ? (parseInt(actualPcs, 10)   || plannedPcs)   : plannedPcs
+      const packs = useCustomPack ? (parseInt(actualPacks, 10) || plannedPacks) : plannedPacks
+      return n * packs * pcs
+    }
+    if (displayUnit === 'packs') {
+      const pcs = useCustomPack ? (parseInt(actualPcs, 10) || plannedPcs) : plannedPcs
+      return n * pcs
+    }
+    return n
+  }
 
   const pct = task.target_qty > 0
     ? Math.min(100, Math.round((task.actual_qty / task.target_qty) * 100))
     : 0
 
   const handleDeliver = async () => {
-    const amount = parseInt(qty, 10)
-    if (!amount || amount <= 0) {
+    const calculatedQty = calcUnits(qty)
+    if (!calculatedQty || calculatedQty <= 0) {
       setErr('Введіть коректну кількість')
       return
     }
@@ -327,9 +352,9 @@ function DeliveryTaskCard({
     setErr(null)
 
     try {
-      const pcs   = useCustomPack ? (parseInt(actualPcs, 10) || undefined)  : undefined
+      const pcs   = useCustomPack ? (parseInt(actualPcs, 10)   || undefined) : undefined
       const packs = useCustomPack ? (parseInt(actualPacks, 10) || undefined) : undefined
-      await api.deliverTask(task.id, destination, amount, pcs, packs)
+      await api.deliverTask(task.id, destination, calculatedQty, pcs, packs)
       setOpen(false)
       setQty('')
       setCustomPack(false)
@@ -469,31 +494,41 @@ function DeliveryTaskCard({
               </div>
 
               {/* Qty input */}
-              <div className="flex items-center gap-3 px-3 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span className="font-mono text-[11px] text-[var(--text-dim)] tracking-wider whitespace-nowrap">
-                  Кількість:
+              <div className="px-3 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                <span className="font-mono text-[11px] text-[var(--text-dim)] tracking-wider uppercase">
+                  Кількість ({unitLabel})
                 </span>
-                <input
-                  type="number"
-                  min={1}
-                  value={qty}
-                  onChange={e => { setQty(e.target.value); setErr(null) }}
-                  placeholder="0"
-                  className="flex-1 bg-transparent font-mono text-base text-right outline-none"
-                  style={{ color: 'var(--text)' }}
-                />
-                <span className="font-mono text-[11px] text-[var(--text-dim)]">шт</span>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <input
+                    type="number"
+                    min={1}
+                    value={qty}
+                    onChange={e => { setQty(e.target.value); setErr(null) }}
+                    placeholder="0"
+                    className="flex-1 bg-transparent font-mono text-xl text-right outline-none"
+                    style={{ color: 'var(--text)' }}
+                  />
+                  {displayUnit !== 'units' && qty && calcUnits(qty) > 0 && (
+                    <span className="font-mono text-[11px] whitespace-nowrap" style={{ color: 'var(--text-dim)' }}>
+                      = {calcUnits(qty)} шт
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Packaging */}
               {hasPlanned && (
                 <div className="px-3 py-2.5 border-b space-y-2" style={{ borderColor: 'var(--border)' }}>
-                  <div className="flex justify-between items-center">
+                  <div>
                     <span className="font-mono text-[10px] text-[var(--text-dim)] tracking-wider uppercase">
                       Фасування (план)
                     </span>
-                    <span className="font-mono text-[10px]" style={{ color: 'var(--yellow)' }}>
-                      {plannedPcs} шт/пак · {plannedPacks} пак/коробка
+                    <span className="font-mono text-[10px] block mt-0.5" style={{ color: 'var(--yellow)' }}>
+                      {displayUnit === 'boxes'
+                        ? plannedPcsPerBox > 0
+                          ? `1 ящик = ${plannedPcsPerBox} шт`
+                          : `1 ящик = ${plannedPacks} пач × ${plannedPcs} шт`
+                        : `1 пачка = ${plannedPcs} шт`}
                     </span>
                   </div>
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -519,20 +554,24 @@ function DeliveryTaskCard({
                           className="w-full bg-transparent font-mono text-[12px] text-right outline-none"
                           style={{ color: 'var(--text)' }}
                         />
-                        <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">шт/пак</span>
+                        <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">
+                        {plannedPcsPerBox > 0 ? 'шт/ящ' : 'шт/пач'}
+                      </span>
                       </div>
-                      <div className="flex-1 flex items-center gap-1.5 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
-                        <input
-                          type="number"
-                          min={1}
-                          value={actualPacks}
-                          onChange={e => setActualPacks(e.target.value)}
-                          placeholder={String(plannedPacks)}
-                          className="w-full bg-transparent font-mono text-[12px] text-right outline-none"
-                          style={{ color: 'var(--text)' }}
-                        />
-                        <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">пак/кор</span>
-                      </div>
+                      {displayUnit === 'boxes' && plannedPcsPerBox === 0 && (
+                        <div className="flex-1 flex items-center gap-1.5 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
+                          <input
+                            type="number"
+                            min={1}
+                            value={actualPacks}
+                            onChange={e => setActualPacks(e.target.value)}
+                            placeholder={String(plannedPacks)}
+                            className="w-full bg-transparent font-mono text-[12px] text-right outline-none"
+                            style={{ color: 'var(--text)' }}
+                          />
+                          <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">пач/ящ</span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -178,6 +178,8 @@ export interface DriverTask {
   completed_at?: string
   pcs_per_pack?: number
   packs_per_box?: number
+  pcs_per_box?: number
+  task_type?: string
 }
 
 export interface ReplenishAlert {
@@ -193,6 +195,7 @@ export interface ReplenishAlert {
 export interface PackagingRules {
   pcs_per_pack: number
   packs_per_box: number
+  pcs_per_box: number
 }
 
 // ─── API METHODS ─────────────────────────────────────────────────────────────
@@ -345,6 +348,7 @@ export const api = {
     admin_comment?: string
     pcs_per_pack?: number
     packs_per_box?: number
+    pcs_per_box?: number
   }) => post<{ status: string; id: number }>('/api/tasks/incoming', body),
 
   getIncomingTasks: (statusFilter?: string): Promise<IncomingTask[]> =>

@@ -19,6 +19,7 @@ export function AdminTasker() {
   const [comment, setComment] = useState('')
   const [pcsPerPack, setPcsPerPack] = useState('')
   const [packsPerBox, setPacksPerBox] = useState('')
+  const [pcsPerBox, setPcsPerBox] = useState('')
   const [itemsList, setItemsList] = useState<string[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [packagingLoading, setPackagingLoading] = useState(false)
@@ -77,6 +78,7 @@ export function AdminTasker() {
       const rules = await api.getPackagingRules(itemId)
       setPcsPerPack(rules.pcs_per_pack > 0 ? String(rules.pcs_per_pack) : '')
       setPacksPerBox(rules.packs_per_box > 0 ? String(rules.packs_per_box) : '')
+      setPcsPerBox(rules.pcs_per_box > 0 ? String(rules.pcs_per_box) : '')
     } catch (e) {
       console.error(e)
       setPcsPerPack('')
@@ -98,6 +100,7 @@ export function AdminTasker() {
     setComment('')
     setPcsPerPack('')
     setPacksPerBox('')
+    setPcsPerBox('')
   }
 
   const handleSubmit = async () => {
@@ -129,6 +132,7 @@ export function AdminTasker() {
         admin_comment: comment || undefined,
         pcs_per_pack: pcsPerPack ? parseInt(pcsPerPack) : undefined,
         packs_per_box: packsPerBox ? parseInt(packsPerBox) : undefined,
+        pcs_per_box: pcsPerBox ? parseInt(pcsPerBox) : undefined,
       })
       setSuccess('Завдання створено')
       resetForm()
@@ -294,7 +298,7 @@ export function AdminTasker() {
                   Правила фасовки
                   {packagingLoading && <span className="text-[#c9963a] animate-pulse">завантаження...</span>}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <div>
                     <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/пачка</label>
                     <input
@@ -311,6 +315,16 @@ export function AdminTasker() {
                       type="number"
                       value={packsPerBox}
                       onChange={e => setPacksPerBox(e.target.value)}
+                      placeholder="0"
+                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/ящик</label>
+                    <input
+                      type="number"
+                      value={pcsPerBox}
+                      onChange={e => setPcsPerBox(e.target.value)}
                       placeholder="0"
                       className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
                     />

@@ -123,6 +123,7 @@ class IncomingTaskCreate(BaseModel):
     admin_comment: Optional[str] = None
     pcs_per_pack: Optional[int] = None
     packs_per_box: Optional[int] = None
+    pcs_per_box: Optional[int] = None
 
 class IncomingTaskStatusUpdate(BaseModel):
     status: str
@@ -662,16 +663,20 @@ async def get_packaging_rules(item_id: str):
     p = await get_pool()
     try:
         row = await p.fetchrow("""
-            SELECT pcs_per_pack, packs_per_box 
-            FROM bot_workshop.packaging_rules 
+            SELECT pcs_per_pack, packs_per_box, pcs_per_box
+            FROM bot_workshop.packaging_rules
             WHERE item_id = $1
         """, item_id)
         if row:
-            return {"pcs_per_pack": int(row['pcs_per_pack'] or 0), "packs_per_box": int(row['packs_per_box'] or 0)}
-        return {"pcs_per_pack": 0, "packs_per_box": 0}
+            return {
+                "pcs_per_pack": int(row['pcs_per_pack'] or 0),
+                "packs_per_box": int(row['packs_per_box'] or 0),
+                "pcs_per_box": int(row['pcs_per_box'] or 0),
+            }
+        return {"pcs_per_pack": 0, "packs_per_box": 0, "pcs_per_box": 0}
     except Exception as e:
         print(f"Error in GET /api/admin/packaging-rules: {e}")
-        return {"pcs_per_pack": 0, "packs_per_box": 0}
+        return {"pcs_per_pack": 0, "packs_per_box": 0, "pcs_per_box": 0}
 
 @app.post("/api/tasks/incoming")
 async def create_incoming_task(body: IncomingTaskCreate):
@@ -687,18 +692,20 @@ async def create_incoming_task(body: IncomingTaskCreate):
             RETURNING id
         """, effective_item_id, effective_qty, body.admin_comment, is_simple)
 
-        if not is_simple and body.item_id and (body.pcs_per_pack or body.packs_per_box):
+        if not is_simple and body.item_id and (body.pcs_per_pack or body.packs_per_box or body.pcs_per_box):
             pcs = body.pcs_per_pack or 0
             packs = body.packs_per_box or 0
-            if pcs > 0 or packs > 0:
+            pcs_box = body.pcs_per_box or 0
+            if pcs > 0 or packs > 0 or pcs_box > 0:
                 await p.execute("""
-                    INSERT INTO bot_workshop.packaging_rules (item_id, pcs_per_pack, packs_per_box, updated_at)
-                    VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                    ON CONFLICT (item_id) DO UPDATE SET 
+                    INSERT INTO bot_workshop.packaging_rules (item_id, pcs_per_pack, packs_per_box, pcs_per_box, updated_at)
+                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                    ON CONFLICT (item_id) DO UPDATE SET
                         pcs_per_pack = EXCLUDED.pcs_per_pack,
                         packs_per_box = EXCLUDED.packs_per_box,
+                        pcs_per_box = EXCLUDED.pcs_per_box,
                         updated_at = CURRENT_TIMESTAMP
-                """, body.item_id, pcs, packs)
+                """, body.item_id, pcs, packs, pcs_box)
 
         return {"status": "created", "id": new_id}
     except Exception as e:
@@ -835,7 +842,8 @@ async def get_driver_tasks():
         rows = await p.fetch("""
             SELECT it.id, it.item_id, it.target_qty, it.actual_qty, it.status,
                    it.admin_comment, it.driver_comment, it.is_simple, it.created_at,
-                   pr.pcs_per_pack, pr.packs_per_box
+                   it.task_type,
+                   pr.pcs_per_pack, pr.packs_per_box, pr.pcs_per_box
             FROM bot_workshop.incoming_tasks it
             LEFT JOIN bot_workshop.packaging_rules pr ON pr.item_id = it.item_id
             WHERE it.status IN ('очікується', 'в роботі')

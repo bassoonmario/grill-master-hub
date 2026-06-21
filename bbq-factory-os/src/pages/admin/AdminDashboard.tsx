@@ -1,18 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Card, Spinner } from '@/components/UI'
 import { api, GlobalStat, NotificationAlert } from '@/lib/api'
-import { AlertTriangle, Plus, Check } from 'lucide-react'
+import { AlertTriangle, Plus, Check, Package } from 'lucide-react'
 
 export function AdminDashboard() {
   const [stats, setStats] = useState<GlobalStat[]>([])
   const [alerts, setAlerts] = useState<NotificationAlert[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Новий Supply Task 
-  const [orderingItem, setOrderingItem] = useState<NotificationAlert | null>(null)
-  const [orderQty, setOrderQty] = useState<number>(0)
-  const [orderComment, setOrderComment] = useState('')
-  const [isSyncing, setIsSyncing] = useState(false)
+  // Модалка замовлення
+  const [orderingItem, setOrderingItem]         = useState<NotificationAlert | null>(null)
+  const [orderDestination, setOrderDestination] = useState<'main' | 'operative'>('main')
+  const [orderQty, setOrderQty]                 = useState<number>(0)
+  const [orderComment, setOrderComment]         = useState('')
+  const [orderPcsPerPack, setOrderPcsPerPack]   = useState('')
+  const [orderPacksPerBox, setOrderPacksPerBox] = useState('')
+  const [orderPcsPerBox, setOrderPcsPerBox]     = useState('')
+  const [packagingLoading, setPackagingLoading] = useState(false)
+  const [isSyncing, setIsSyncing]               = useState(false)
 
   const loadData = useCallback(async () => {
     try {
@@ -34,17 +39,54 @@ export function AdminDashboard() {
     loadData()
   }, [loadData])
 
+  const openOrderModal = async (al: NotificationAlert) => {
+    const dest: 'main' | 'operative' = al.source === 'inventory_operative' ? 'operative' : 'main'
+    setOrderingItem(al)
+    setOrderDestination(dest)
+    setOrderQty(Math.ceil((al.limit_val - al.quantity) * 1.5) || 10)
+    setOrderComment('')
+    setOrderPcsPerPack('')
+    setOrderPacksPerBox('')
+    setOrderPcsPerBox('')
+    setPackagingLoading(true)
+    try {
+      const rules = await api.getPackagingRules(al.item_id)
+      setOrderPcsPerPack(rules.pcs_per_pack > 0 ? String(rules.pcs_per_pack) : '')
+      setOrderPacksPerBox(rules.packs_per_box > 0 ? String(rules.packs_per_box) : '')
+      setOrderPcsPerBox(rules.pcs_per_box > 0 ? String(rules.pcs_per_box) : '')
+    } catch {
+    } finally {
+      setPackagingLoading(false)
+    }
+  }
+
+  const closeOrderModal = () => {
+    setOrderingItem(null)
+    setOrderQty(0)
+    setOrderComment('')
+    setOrderPcsPerPack('')
+    setOrderPacksPerBox('')
+    setOrderPcsPerBox('')
+  }
+
   const handleOrderSubmit = async () => {
     if (!orderingItem || orderQty <= 0) return
     setIsSyncing(true)
+    const task_type = orderDestination === 'operative' ? 'internal' : 'supply'
     try {
-      await api.createIncomingTask({ task_type: 'supply', item_id: orderingItem.item_id, target_qty: orderQty, admin_comment: orderComment })
+      await api.createIncomingTask({
+        task_type,
+        item_id: orderingItem.item_id,
+        target_qty: orderQty,
+        admin_comment: orderComment || undefined,
+        pcs_per_pack: orderPcsPerPack ? parseInt(orderPcsPerPack) : undefined,
+        packs_per_box: orderPacksPerBox ? parseInt(orderPacksPerBox) : undefined,
+        pcs_per_box: orderPcsPerBox ? parseInt(orderPcsPerBox) : undefined,
+      })
       setAlerts(prev => prev.filter(al => al !== orderingItem))
-      setOrderingItem(null)
-      setOrderQty(0)
-      setOrderComment('')
-    } catch (e) {
-      alert("Помилка замовлення")
+      closeOrderModal()
+    } catch {
+      alert('Помилка замовлення')
     } finally {
       setIsSyncing(false)
     }
@@ -96,12 +138,8 @@ export function AdminDashboard() {
                 </div>
 
                 {al.source !== 'defects' && (
-                  <button 
-                    onClick={() => {
-                      setOrderingItem(al)
-                      setOrderQty(Math.ceil((al.limit_val - al.quantity) * 1.5) || 10)
-                      setOrderComment('')
-                    }}
+                  <button
+                    onClick={() => openOrderModal(al)}
                     className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all"
                   >
                     Замовити
@@ -143,54 +181,119 @@ export function AdminDashboard() {
 
       {/* МОДАЛКА ЗАМОВЛЕННЯ */}
       {orderingItem && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm shadow-2xl">
-          <Card className="w-full max-w-sm border border-[#c9963a]/30 bg-[#121212] shadow-[0_0_30px_rgba(201,150,58,0.1)]">
-            <div className="p-6">
-              <h3 className="text-[#c9963a] font-bold uppercase text-sm tracking-widest mb-4 flex items-center gap-2">
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <Card className="w-full max-w-sm border border-[#c9963a]/30 bg-[#121212] shadow-[0_0_30px_rgba(201,150,58,0.1)] max-h-[90vh] overflow-y-auto">
+            <div className="p-6 space-y-4">
+              <h3 className="text-[#c9963a] font-bold uppercase text-sm tracking-widest flex items-center gap-2">
                 <Plus className="w-4 h-4" /> Нове постачання
               </h3>
-              
-              <div className="space-y-4 mb-6">
-                <div>
-                  <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Артикул</label>
-                  <input
-                    type="text"
-                    readOnly
-                    value={orderingItem.item_id}
-                    className="w-full bg-black/50 border border-white/5 rounded-lg p-3 text-white/50 text-sm font-mono outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Кількість (Шт)</label>
-                  <input
-                    type="number"
-                    value={orderQty}
-                    onChange={(e) => setOrderQty(parseInt(e.target.value) || 0)}
-                    className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-center font-display text-xl outline-none focus:border-[#c9963a]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Фасовка / Примітка</label>
-                  <input
-                    type="text"
-                    value={orderComment}
-                    placeholder="Напр., пачка на 250 шт."
-                    onChange={(e) => setOrderComment(e.target.value)}
-                    className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-[#c9963a]"
-                  />
+
+              {/* Артикул */}
+              <div>
+                <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Артикул</label>
+                <input
+                  type="text"
+                  readOnly
+                  value={orderingItem.item_id}
+                  className="w-full bg-black/50 border border-white/5 rounded-lg p-3 text-white/50 text-sm font-mono outline-none"
+                />
+              </div>
+
+              {/* Склад */}
+              <div>
+                <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1.5 tracking-widest">Склад призначення</label>
+                <div className="flex">
+                  {(['main', 'operative'] as const).map(d => (
+                    <button
+                      key={d}
+                      onClick={() => setOrderDestination(d)}
+                      className="flex-1 py-2.5 font-mono text-[11px] tracking-widest uppercase transition-all first:rounded-l-lg last:rounded-r-lg border"
+                      style={{
+                        background:  orderDestination === d ? 'rgba(201,150,58,0.15)' : 'transparent',
+                        color:       orderDestination === d ? '#c9963a' : 'rgba(255,255,255,0.3)',
+                        borderColor: orderDestination === d ? 'rgba(201,150,58,0.4)' : 'rgba(255,255,255,0.1)',
+                      }}
+                    >
+                      {d === 'main' ? 'Основний' : 'Майстерня'}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setOrderingItem(null)} 
+              {/* Кількість */}
+              <div>
+                <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Кількість (шт)</label>
+                <input
+                  type="number"
+                  value={orderQty}
+                  onChange={e => setOrderQty(parseInt(e.target.value) || 0)}
+                  className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-center font-display text-xl outline-none focus:border-[#c9963a]"
+                />
+              </div>
+
+              {/* Фасування */}
+              <div className="bg-[#0e0e0e] border border-white/5 rounded-xl p-4">
+                <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3 flex items-center gap-2">
+                  <Package className="w-3 h-3" />
+                  Правила фасовки
+                  {packagingLoading && <span className="text-[#c9963a] animate-pulse">завантаження...</span>}
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/пачка</label>
+                    <input
+                      type="number"
+                      value={orderPcsPerPack}
+                      onChange={e => setOrderPcsPerPack(e.target.value)}
+                      placeholder="0"
+                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">пачок/ящик</label>
+                    <input
+                      type="number"
+                      value={orderPacksPerBox}
+                      onChange={e => setOrderPacksPerBox(e.target.value)}
+                      placeholder="0"
+                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/ящик</label>
+                    <input
+                      type="number"
+                      value={orderPcsPerBox}
+                      onChange={e => setOrderPcsPerBox(e.target.value)}
+                      placeholder="0"
+                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Коментар */}
+              <div>
+                <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1 tracking-widest">Коментар</label>
+                <input
+                  type="text"
+                  value={orderComment}
+                  placeholder="Додаткові примітки (необов'язково)"
+                  onChange={e => setOrderComment(e.target.value)}
+                  className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-sm font-mono outline-none focus:border-[#c9963a]"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={closeOrderModal}
                   className="flex-1 py-3 text-gray-400 text-xs font-mono uppercase tracking-widest rounded-xl border border-white/5 hover:bg-white/5 active:scale-95 transition-all"
                 >
                   Скасувати
                 </button>
-                <button 
-                  onClick={handleOrderSubmit} 
-                  disabled={isSyncing || orderQty <= 0} 
+                <button
+                  onClick={handleOrderSubmit}
+                  disabled={isSyncing || orderQty <= 0}
                   className="flex-1 py-3 bg-[#c9963a] text-black font-black text-xs font-mono uppercase tracking-widest rounded-xl flex items-center justify-center gap-2 shadow-lg hover:brightness-110 disabled:opacity-50 active:scale-95 transition-all"
                 >
                   {isSyncing ? <Spinner /> : <><Check className="w-4 h-4" /> Відправити</>}
