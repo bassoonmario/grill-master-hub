@@ -3,9 +3,10 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 export type Role = 'master' | 'driver' | 'admin'
 
 export interface User {
-  tid: number
-  name: string
-  role: Role
+  tid:           number
+  name:          string
+  role:          Role
+  can_replenish: boolean
 }
 
 interface AuthCtx {

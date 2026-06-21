@@ -299,37 +299,49 @@ function DeliveryTaskCard({
 }: {
   task: DriverTask; onRefresh: () => void; isDone: boolean
 }) {
-  const [open, setOpen]             = useState(false)
-  const [destination, setDest]      = useState<'main' | 'operative'>('main')
-  const [qty, setQty]               = useState('')
-  const [loading, setLoading]       = useState(false)
-  const [err, setErr]               = useState<string | null>(null)
+  const [open, setOpen]               = useState(false)
+  const [destination, setDest]        = useState<'main' | 'operative'>('main')
+  const [qty, setQty]                 = useState('')
+  const [loading, setLoading]         = useState(false)
+  const [err, setErr]                 = useState<string | null>(null)
+  const [useCustomPack, setCustomPack] = useState(false)
+  const [actualPcs, setActualPcs]     = useState('')
+  const [actualPacks, setActualPacks] = useState('')
+
+  const plannedPcs   = task.pcs_per_pack  ?? 0
+  const plannedPacks = task.packs_per_box ?? 0
+  const hasPlanned   = plannedPcs > 0 || plannedPacks > 0
 
   const pct = task.target_qty > 0
     ? Math.min(100, Math.round((task.actual_qty / task.target_qty) * 100))
     : 0
 
   const handleDeliver = async () => {
-  const amount = parseInt(qty, 10)
-  if (!amount || amount <= 0) {
-    setErr('Введіть коректну кількість')
-    return
-  }
+    const amount = parseInt(qty, 10)
+    if (!amount || amount <= 0) {
+      setErr('Введіть коректну кількість')
+      return
+    }
 
-  setLoading(true)
-  setErr(null)
+    setLoading(true)
+    setErr(null)
 
-  try {
-    await api.deliverTask(task.id, destination, amount)
-    setOpen(false)
-    setQty('')
-  } catch {
-    setErr('Помилка доставки. Спробуйте ще раз.')
-  } finally {
-    setLoading(false)
-    onRefresh()
+    try {
+      const pcs   = useCustomPack ? (parseInt(actualPcs, 10) || undefined)  : undefined
+      const packs = useCustomPack ? (parseInt(actualPacks, 10) || undefined) : undefined
+      await api.deliverTask(task.id, destination, amount, pcs, packs)
+      setOpen(false)
+      setQty('')
+      setCustomPack(false)
+      setActualPcs('')
+      setActualPacks('')
+    } catch {
+      setErr('Помилка доставки. Спробуйте ще раз.')
+    } finally {
+      setLoading(false)
+      onRefresh()
+    }
   }
-}
 
   return (
     <div
@@ -472,6 +484,59 @@ function DeliveryTaskCard({
                 />
                 <span className="font-mono text-[11px] text-[var(--text-dim)]">шт</span>
               </div>
+
+              {/* Packaging */}
+              {hasPlanned && (
+                <div className="px-3 py-2.5 border-b space-y-2" style={{ borderColor: 'var(--border)' }}>
+                  <div className="flex justify-between items-center">
+                    <span className="font-mono text-[10px] text-[var(--text-dim)] tracking-wider uppercase">
+                      Фасування (план)
+                    </span>
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--yellow)' }}>
+                      {plannedPcs} шт/пак · {plannedPacks} пак/коробка
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useCustomPack}
+                      onChange={e => setCustomPack(e.target.checked)}
+                      className="accent-[var(--orange)]"
+                    />
+                    <span className="font-mono text-[10px] text-[var(--text-dim)] tracking-wider">
+                      Інше фасування
+                    </span>
+                  </label>
+                  {useCustomPack && (
+                    <div className="flex gap-2 pt-1">
+                      <div className="flex-1 flex items-center gap-1.5 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
+                        <input
+                          type="number"
+                          min={1}
+                          value={actualPcs}
+                          onChange={e => setActualPcs(e.target.value)}
+                          placeholder={String(plannedPcs)}
+                          className="w-full bg-transparent font-mono text-[12px] text-right outline-none"
+                          style={{ color: 'var(--text)' }}
+                        />
+                        <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">шт/пак</span>
+                      </div>
+                      <div className="flex-1 flex items-center gap-1.5 rounded border px-2 py-1.5" style={{ borderColor: 'var(--border)' }}>
+                        <input
+                          type="number"
+                          min={1}
+                          value={actualPacks}
+                          onChange={e => setActualPacks(e.target.value)}
+                          placeholder={String(plannedPacks)}
+                          className="w-full bg-transparent font-mono text-[12px] text-right outline-none"
+                          style={{ color: 'var(--text)' }}
+                        />
+                        <span className="font-mono text-[9px] text-[var(--text-dim)] whitespace-nowrap">пак/кор</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Confirm / Cancel */}
               <div className="flex">

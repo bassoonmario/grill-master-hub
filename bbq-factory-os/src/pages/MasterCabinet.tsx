@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { api, MasterDashboard, MasterLog, Shipment, Defect } from '@/lib/api'
+import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert } from '@/lib/api'
 import { SectionTitle, StatCard, Spinner, Card } from '@/components/UI'
-import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle } from 'lucide-react'
+import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus } from 'lucide-react'
 
 interface UnifiedStock {
   sku: string
@@ -46,6 +46,9 @@ export function MasterCabinet() {
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
   const [openShipmentDays, setOpenShipmentDays] = useState<Record<string, boolean>>({})
 
+  const [replenishAlerts, setReplenishAlerts] = useState<ReplenishAlert[]>([])
+  const [replenishLoading, setReplenishLoading] = useState<Record<number, boolean>>({})
+
   const parseCategory = (sku: string): string => {
     if (sku.startsWith('MB') || sku.startsWith('MBA')) return 'minibars'
     if (sku.startsWith('G')) {
@@ -65,13 +68,14 @@ export function MasterCabinet() {
     if (!user) return
     try {
       setLoading(true)
-      const [d, l, items, s, df, stock] = await Promise.all([
+      const [d, l, items, s, df, stock, alerts] = await Promise.all([
         api.getMasterDashboard(user.name),
         api.getMasterLogs(user.name),
         api.getItems(),
         api.getShipments(),
         api.getDefects(),
-        api.stock()
+        api.stock(),
+        user.can_replenish ? api.getReplenishAlerts() : Promise.resolve([]),
       ])
       setData(d)
       setLogs(l)
@@ -85,9 +89,10 @@ export function MasterCabinet() {
       }))
       setShipments(parsedShipments)
       setDefects(df)
+      setReplenishAlerts(alerts)
 
-      const filtered = stock.filter(i => 
-        i.category === 'ready' || 
+      const filtered = stock.filter(i =>
+        i.category === 'ready' ||
         i.category === 'cases_empty' ||
         i.category === 'finished_main'
       )
@@ -219,6 +224,18 @@ export function MasterCabinet() {
     }
   }
 
+  const handleConfirmReplenish = async (alertId: number) => {
+    setReplenishLoading(prev => ({ ...prev, [alertId]: true }))
+    try {
+      await api.confirmReplenish(alertId)
+      setReplenishAlerts(prev => prev.filter(a => a.id !== alertId))
+    } catch {
+      alert('Помилка підтвердження поповнення')
+    } finally {
+      setReplenishLoading(prev => ({ ...prev, [alertId]: false }))
+    }
+  }
+
   // ── ГРУПУВАННЯ ВІДПРАВОК — читаємо готові дані з БД, без парсингу ──
   const skuSortKey = (sku: string): number => {
     const match = sku.match(/^[GTМВ]*(\d+)/i)
@@ -313,6 +330,102 @@ export function MasterCabinet() {
           <div className="grid grid-cols-2 gap-4 mb-8">
             <StatCard icon={<Target className="w-6 h-6" />} value={data?.potential_earnings || 0} label="План, грн" accent="orange" />
             <StatCard icon={<DollarSign className="w-6 h-6" />} value={data?.current_earnings || 0} label="Виконано, грн" accent="green" />
+          </div>
+        )}
+
+        {/* СЕКЦІЯ ПОПОВНЕННЯ (тільки для can_replenish) */}
+        {tab === 'plan' && user?.can_replenish && replenishAlerts.length > 0 && (
+          <div className="mb-6 space-y-3">
+            <SectionTitle>Поповнення майстерні</SectionTitle>
+            {replenishAlerts.map(alert => {
+              const packs = alert.pcs_per_pack > 1
+                ? Math.round(alert.quantity / alert.pcs_per_pack)
+                : null
+              const boxes = packs && alert.packs_per_box > 0
+                ? Math.floor(packs / alert.packs_per_box)
+                : null
+              const remainingPacks = boxes && alert.packs_per_box > 0
+                ? packs! % alert.packs_per_box
+                : null
+
+              return (
+                <div
+                  key={alert.id}
+                  className="rounded-xl border overflow-hidden"
+                  style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <div className="flex items-center gap-2.5">
+                      <PackagePlus size={14} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+                      <span className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
+                        {alert.item_name}
+                      </span>
+                    </div>
+                    <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                      #{alert.id}
+                    </span>
+                  </div>
+
+                  {/* Info rows */}
+                  <div className="px-4 py-3 space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                        Зараз в майстерні
+                      </span>
+                      <span className="font-mono text-[12px]" style={{ color: 'var(--text-dim)' }}>
+                        {alert.current_qty} шт
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                        Забрати зі складу
+                      </span>
+                      <div className="text-right">
+                        {packs ? (
+                          <>
+                            <span className="font-display text-base" style={{ color: 'var(--orange)' }}>
+                              {boxes && boxes > 0 ? (
+                                <>
+                                  {boxes} ящ{boxes === 1 ? '' : 'ики'}
+                                  {remainingPacks ? ` + ${remainingPacks} пач` : ''}
+                                </>
+                              ) : (
+                                <>{packs} пач{packs === 1 ? 'ка' : 'ки'}</>
+                              )}
+                            </span>
+                            <span className="font-mono text-[10px] ml-1.5" style={{ color: 'var(--text-dim)' }}>
+                              ({alert.quantity} шт)
+                            </span>
+                          </>
+                        ) : (
+                          <span className="font-display text-base" style={{ color: 'var(--orange)' }}>
+                            {alert.quantity} шт
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Button */}
+                  <div className="px-4 pb-4">
+                    <button
+                      onClick={() => handleConfirmReplenish(alert.id)}
+                      disabled={!!replenishLoading[alert.id]}
+                      className="w-full flex items-center justify-center gap-2 font-mono text-[11px] tracking-[2px] uppercase py-2.5 rounded-lg border transition-all active:scale-[0.98] disabled:opacity-50"
+                      style={{ borderColor: 'var(--green)', color: 'var(--green)', background: 'var(--green-dim)' }}
+                    >
+                      {replenishLoading[alert.id]
+                        ? <RefreshCw size={12} className="animate-spin" />
+                        : <Check size={12} strokeWidth={2.5} />
+                      }
+                      {replenishLoading[alert.id] ? 'Збереження...' : 'Підтвердити поповнення'}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
 

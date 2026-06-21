@@ -176,6 +176,18 @@ export interface DriverTask {
   is_simple: boolean
   created_at: string
   completed_at?: string
+  pcs_per_pack?: number
+  packs_per_box?: number
+}
+
+export interface ReplenishAlert {
+  id: number
+  item_id: string
+  item_name: string
+  quantity: number
+  current_qty: number
+  pcs_per_pack: number
+  packs_per_box: number
 }
 
 export interface PackagingRules {
@@ -364,12 +376,25 @@ export const api = {
   getDriverTasksDone: (): Promise<DriverTask[]> =>
     get<DriverTask[]>('/api/driver/tasks/done'),
 
-  deliverTask: (taskId: number, destination: 'main' | 'operative', qty: number) =>
+  deliverTask: (
+    taskId: number,
+    destination: 'main' | 'operative',
+    qty: number,
+    actualPcsPerPack?: number,
+    actualPacksPerBox?: number,
+  ) =>
     post<{ status: string; total_delivered: number; task_status: string }>(
       `/api/driver/tasks/${taskId}/deliver`,
-      { task_id: taskId, destination, qty }
+      { task_id: taskId, destination, qty, actual_pcs_per_pack: actualPcsPerPack, actual_packs_per_box: actualPacksPerBox }
     ),
 
   completeSimpleTask: (taskId: number) =>
     post<{ status: string }>(`/api/tasks/incoming/${taskId}/complete`, {}),
+
+  // ─── MASTER REPLENISH ────────────────────────────────────────────────────────
+  getReplenishAlerts: (): Promise<ReplenishAlert[]> =>
+    get<ReplenishAlert[]>('/api/master/replenish-alerts'),
+
+  confirmReplenish: (alertId: number) =>
+    post<{ status: string }>(`/api/master/replenish/${alertId}/confirm`, {}),
 }

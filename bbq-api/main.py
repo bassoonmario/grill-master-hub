@@ -84,9 +84,10 @@ def cycle_date_range():
     return today.replace(day=16), today.replace(day=last_day)
 
 class UserOut(BaseModel):
-    tid:  int
-    name: str
-    role: str
+    tid:           int
+    name:          str
+    role:          str
+    can_replenish: bool = False
 
 class RegisterBody(BaseModel):
     name:     str
@@ -135,6 +136,8 @@ class TaskDelivery(BaseModel):
     task_id: int
     destination: str  # 'main' або 'operative'
     qty: int
+    actual_pcs_per_pack: Optional[int] = None
+    actual_packs_per_box: Optional[int] = None
 
 class IncomingTaskUpdate(BaseModel):
     item_id: Optional[str] = None
@@ -165,7 +168,7 @@ async def register_user(body: RegisterBody):
 async def login_user(body: LoginBody):
     p = await get_pool()
     row = await p.fetchrow("""
-        SELECT tid, name, role 
+        SELECT tid, name, role, COALESCE(can_replenish, false) AS can_replenish
         FROM public.masters
         WHERE tid = $1 AND pin_code = $2
     """, body.tid, body.pin_code)
@@ -830,11 +833,13 @@ async def get_driver_tasks():
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT id, item_id, target_qty, actual_qty, status, admin_comment, 
-                   driver_comment, is_simple, created_at
-            FROM bot_workshop.incoming_tasks
-            WHERE status IN ('очікується', 'в роботі')
-            ORDER BY created_at ASC
+            SELECT it.id, it.item_id, it.target_qty, it.actual_qty, it.status,
+                   it.admin_comment, it.driver_comment, it.is_simple, it.created_at,
+                   pr.pcs_per_pack, pr.packs_per_box
+            FROM bot_workshop.incoming_tasks it
+            LEFT JOIN bot_workshop.packaging_rules pr ON pr.item_id = it.item_id
+            WHERE it.status IN ('очікується', 'в роботі')
+            ORDER BY it.created_at ASC
         """)
         return [dict(r) for r in rows]
     except Exception as e:
@@ -848,9 +853,10 @@ async def deliver_task(task_id: int, body: TaskDelivery):
             async with conn.transaction():
                 # Записуємо рядок доставки
                 await conn.execute("""
-                    INSERT INTO bot_workshop.task_deliveries (task_id, item_id, destination, qty, delivered_at)
-                    VALUES ($1, (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $1), $2, $3, CURRENT_TIMESTAMP)
-                """, task_id, body.destination, body.qty)
+                    INSERT INTO bot_workshop.task_deliveries
+                        (task_id, item_id, destination, qty, delivered_at, actual_pcs_per_pack, actual_packs_per_box)
+                    VALUES ($1, (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $1), $2, $3, CURRENT_TIMESTAMP, $4, $5)
+                """, task_id, body.destination, body.qty, body.actual_pcs_per_pack, body.actual_packs_per_box)
 
                 # Оновлюємо залишки у відповідній таблиці
                 if body.destination == 'main':
@@ -918,6 +924,53 @@ async def complete_simple_task(task_id: int):
         """, task_id)
         return {"status": "ok"}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/master/replenish-alerts")
+async def get_replenish_alerts():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT ob.id, ob.item_id, ob.quantity,
+                   COALESCE(io.item_name, ob.item_id) AS item_name,
+                   io.quantity::int                    AS current_qty,
+                   COALESCE(pr.pcs_per_pack, 1)::int  AS pcs_per_pack,
+                   COALESCE(pr.packs_per_box, 0)::int AS packs_per_box
+            FROM bot_workshop.operative_buffer ob
+            LEFT JOIN bot_workshop.inventory_operative io ON io.item_id = ob.item_id
+            LEFT JOIN bot_workshop.packaging_rules pr     ON pr.item_id = ob.item_id
+            WHERE ob.status = 'pending'
+            ORDER BY ob.created_at ASC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/master/replenish-alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/replenish/{alert_id}/confirm")
+async def confirm_replenish(alert_id: int):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    UPDATE bot_workshop.operative_buffer
+                    SET status = 'completed'
+                    WHERE id = $1 AND status = 'pending'
+                    RETURNING item_id, quantity
+                """, alert_id)
+                if not row:
+                    raise HTTPException(status_code=404, detail="Алерт не знайдено або вже виконано")
+                await conn.execute("""
+                    UPDATE bot_workshop.inventory_operative
+                    SET quantity = quantity + $1
+                    WHERE item_id = $2
+                """, row['quantity'], row['item_id'])
+        return {"status": "ok", "item_id": row['item_id'], "added_qty": row['quantity']}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/master/replenish/{alert_id}/confirm: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/driver/tasks/done")
