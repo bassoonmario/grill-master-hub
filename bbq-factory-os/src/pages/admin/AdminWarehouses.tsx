@@ -29,7 +29,7 @@ export function AdminWarehouses() {
   const [items, setItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [openAccordion, setOpenAccordion] = useState<string | null>('grills')
+  const [openAccordion, setOpenAccordion] = useState<string | null>(null)
   
   const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Record<string, string>>({})

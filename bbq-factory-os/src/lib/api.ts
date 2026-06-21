@@ -175,6 +175,7 @@ export interface DriverTask {
   driver_comment: string | null
   is_simple: boolean
   created_at: string
+  completed_at?: string
 }
 
 export interface PackagingRules {
@@ -343,6 +344,9 @@ export const api = {
   updateIncomingTaskStatus: (taskId: number, status: string) =>
     patch<{ status: string }>(`/api/admin/incoming-tasks/${taskId}/status`, { status }),
 
+  updateIncomingTask: (taskId: number, body: { item_id?: string; target_qty?: number; admin_comment?: string }): Promise<{ status: string }> =>
+    patch<{ status: string }>(`/api/admin/incoming-tasks/${taskId}`, body),
+
   updateInventory: (tableKey: string, itemId: string, newQuantity: number) =>
     fetch(`${BASE}/api/admin/inventory`, {
       method: 'PATCH',
@@ -356,6 +360,9 @@ export const api = {
   // ─── DRIVER API ─────────────────────────────────────────────────────────────
   getDriverTasks: (): Promise<DriverTask[]> =>
     get<DriverTask[]>('/api/driver/tasks'),
+
+  getDriverTasksDone: (): Promise<DriverTask[]> =>
+    get<DriverTask[]>('/api/driver/tasks/done'),
 
   deliverTask: (taskId: number, destination: 'main' | 'operative', qty: number) =>
     post<{ status: string; total_delivered: number; task_status: string }>(

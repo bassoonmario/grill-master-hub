@@ -136,6 +136,11 @@ class TaskDelivery(BaseModel):
     destination: str  # 'main' або 'operative'
     qty: int
 
+class IncomingTaskUpdate(BaseModel):
+    item_id: Optional[str] = None
+    target_qty: Optional[int] = None
+    admin_comment: Optional[str] = None
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -722,6 +727,30 @@ async def update_incoming_task_status(task_id: int, body: IncomingTaskStatusUpda
         print(f"Error in PATCH /api/admin/incoming-tasks/{task_id}/status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.patch("/api/admin/incoming-tasks/{task_id}")
+async def update_incoming_task(task_id: int, body: IncomingTaskUpdate):
+    p = await get_pool()
+    try:
+        existing = await p.fetchrow("SELECT * FROM bot_workshop.incoming_tasks WHERE id = $1", task_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        new_item_id = body.item_id if body.item_id is not None else existing['item_id']
+        new_target_qty = body.target_qty if body.target_qty is not None else existing['target_qty']
+        new_admin_comment = body.admin_comment if body.admin_comment is not None else existing['admin_comment']
+
+        await p.execute("""
+            UPDATE bot_workshop.incoming_tasks
+            SET item_id = $1, target_qty = $2, admin_comment = $3
+            WHERE id = $4
+        """, new_item_id, new_target_qty, new_admin_comment, task_id)
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.patch("/api/admin/inventory")
 async def update_admin_inventory(body: InventoryUpdate):
     p = await get_pool()
@@ -888,5 +917,21 @@ async def complete_simple_task(task_id: int):
             WHERE id = $1 AND is_simple = true
         """, task_id)
         return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/driver/tasks/done")
+async def get_driver_tasks_done():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, item_id, target_qty, actual_qty, status, admin_comment, 
+                   driver_comment, is_simple, created_at, completed_at
+            FROM bot_workshop.incoming_tasks
+            WHERE status = 'прийнято'
+            ORDER BY completed_at DESC
+            LIMIT 50
+        """)
+        return [dict(r) for r in rows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, DriverTask } from '@/lib/api'
 import { SectionTitle, StatusTag, Spinner } from '@/components/UI'
-import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw } from 'lucide-react'
+import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Archive } from 'lucide-react'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -25,6 +25,7 @@ function formatDate(iso: string): string {
 // ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 
 export function Tasker() {
+  const [tab, setTab] = useState<'active' | 'done'>('active')
   const [tasks, setTasks] = useState<DriverTask[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -35,7 +36,9 @@ export function Tasker() {
     else setRefreshing(true)
     setError(null)
     try {
-      const data = await api.getDriverTasks()
+      const data = tab === 'active' 
+        ? await api.getDriverTasks() 
+        : await api.getDriverTasksDone()
       setTasks(data)
     } catch (e) {
       setError('Не вдалося завантажити завдання')
@@ -43,16 +46,21 @@ export function Tasker() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [tab])
 
-  useEffect(() => { loadTasks() }, [loadTasks])
+  useEffect(() => { loadTasks() }, [loadTasks, tab])
 
-  const activeCount = tasks.filter(
+  const activeCount = tab === 'active' ? tasks.filter(
     t => t.status !== 'done' && t.status !== 'completed'
-  ).length
+  ).length : 0
 
-  const doneTasks    = tasks.filter(t => t.status === 'done' || t.status === 'completed')
   const activeTasks  = tasks.filter(t => t.status !== 'done' && t.status !== 'completed')
+  const archivedTasks = tasks.filter(t => t.status === 'done' || t.status === 'completed')
+
+  const tabs: { key: 'active' | 'done'; label: string; icon: React.ReactNode }[] = [
+    { key: 'active', label: 'Активні', icon: <ClipboardList size={14} /> },
+    { key: 'done', label: 'Виконано', icon: <Archive size={14} /> },
+  ]
 
   return (
     <div className="pb-4">
@@ -101,34 +109,38 @@ export function Tasker() {
         </div>
       )}
 
-      {/* Active tasks */}
-      {!loading && activeTasks.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {activeTasks.map(task => (
-            <TaskCard
-              key={task.id}
-              task={task}
-              onRefresh={() => loadTasks(true)}
-            />
-          ))}
-        </div>
-      )}
+      {/* Tabs */}
+      <div className="flex gap-2 bg-[#0a0a0a] border border-white/5 rounded-xl p-1.5 mb-4">
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-mono text-[11px] uppercase tracking-wider transition-all ${
+              tab === t.key
+                ? 'bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30'
+                : 'text-white/40 hover:text-white/60 border border-transparent'
+            }`}
+          >
+            {t.icon}
+            {t.label}
+          </button>
+        ))}
+      </div>
 
-      {/* Done tasks */}
-      {!loading && doneTasks.length > 0 && (
-        <>
-          <SectionTitle>Виконані</SectionTitle>
-          <div className="flex flex-col gap-3">
-            {doneTasks.map(task => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                onRefresh={() => loadTasks(true)}
-              />
-            ))}
-          </div>
-        </>
-      )}
+      {/* List */}
+      <div className="flex flex-col gap-3">
+        {!loading && tab === 'active' && activeTasks.map(task => (
+          <TaskCard
+            key={task.id}
+            task={task}
+            onRefresh={() => loadTasks(true)}
+          />
+        ))}
+
+        {!loading && tab === 'done' && tasks.map(task => (
+          <DoneTaskCard key={task.id} task={task} />
+        ))}
+      </div>
     </div>
   )
 }
@@ -141,6 +153,52 @@ function TaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () => void
   return task.is_simple
     ? <SimpleTaskCard task={task} onRefresh={onRefresh} />
     : <DeliveryTaskCard task={task} onRefresh={onRefresh} isDone={isDone} />
+}
+
+// ─── DONE TASK CARD ───────────────────────────────────────────────────────────
+
+function DoneTaskCard({ task }: { task: DriverTask }) {
+  return (
+    <div
+      className="bg-surface border border-border rounded-xl overflow-hidden opacity-60"
+      style={{ background: 'var(--surface2)' }}
+    >
+      <div className="flex items-start justify-between px-4 py-3 border-b border-white/5 gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Archive
+            size={14}
+            strokeWidth={1.8}
+            style={{ color: 'var(--text-dim)', flexShrink: 0 }}
+          />
+          <div className="min-w-0">
+            <div className="font-semibold text-sm leading-tight truncate" style={{ color: 'var(--text)' }}>
+              {task.item_id || 'Просте завдання'}
+            </div>
+            <div className="font-mono text-[9px] text-[var(--text-dim)] mt-0.5">
+              #{task.id}
+            </div>
+          </div>
+        </div>
+        <StatusTag type="done" />
+      </div>
+
+      <div className="px-4 py-3 space-y-2">
+        <div className="flex justify-between items-center">
+          <span className="font-mono text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Кількість</span>
+          <span className="font-mono text-[12px] text-[var(--text-dim)]">
+            {task.actual_qty} / {task.target_qty} шт
+          </span>
+        </div>
+
+        <div className="flex justify-between items-center pt-1 border-t border-white/5">
+          <span className="font-mono text-[10px] text-[var(--text-dim)] uppercase tracking-wider">Завершено</span>
+          <span className="font-mono text-[10px] text-[var(--text-dim)]">
+            {formatDate(task.completed_at || '')}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── SIMPLE TASK CARD ─────────────────────────────────────────────────────────
@@ -252,20 +310,26 @@ function DeliveryTaskCard({
     : 0
 
   const handleDeliver = async () => {
-    const amount = parseInt(qty, 10)
-    if (!amount || amount <= 0) { setErr('Введіть коректну кількість'); return }
-    setLoading(true)
-    setErr(null)
-    try {
-      await api.deliverTask(task.id, destination, amount)
-      setOpen(false)
-      setQty('')
-      onRefresh()
-    } catch {
-      setErr('Помилка доставки. Спробуйте ще раз.')
-      setLoading(false)
-    }
+  const amount = parseInt(qty, 10)
+  if (!amount || amount <= 0) {
+    setErr('Введіть коректну кількість')
+    return
   }
+
+  setLoading(true)
+  setErr(null)
+
+  try {
+    await api.deliverTask(task.id, destination, amount)
+    setOpen(false)
+    setQty('')
+  } catch {
+    setErr('Помилка доставки. Спробуйте ще раз.')
+  } finally {
+    setLoading(false)
+    onRefresh()
+  }
+}
 
   return (
     <div

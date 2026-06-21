@@ -39,12 +39,14 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       
       <Route path="/" element={
-        user?.role === 'master' 
-          ? <Navigate to="/master" replace /> 
-          : user?.role === 'admin'
-          ? <Navigate to="/admin" replace />
-          : <PrivateRoute><Dashboard /></PrivateRoute>
-      } />
+  user?.role === 'master' 
+    ? <Navigate to="/master" replace /> 
+    : user?.role === 'admin' 
+    ? <Navigate to="/admin" replace /> 
+    : user?.role === 'driver'
+    ? <Navigate to="/tasker" replace />
+    : <PrivateRoute><Dashboard /></PrivateRoute>
+} />
 
       <Route path="/admin"     element={<PrivateRoute requireRole="admin"><AdminCabinet /></PrivateRoute>} />
 

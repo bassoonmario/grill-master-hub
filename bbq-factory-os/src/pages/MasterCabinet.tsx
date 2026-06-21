@@ -3,13 +3,14 @@ import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { api, MasterDashboard, MasterLog, Shipment, Defect } from '@/lib/api'
 import { SectionTitle, StatCard, Spinner, Card } from '@/components/UI'
-import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, Box, Package, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle } from 'lucide-react'
+import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle } from 'lucide-react'
 
 interface UnifiedStock {
   sku: string
   name: string
   ready: number
   cases: number
+  warehouse_qty: number
   category: string
 }
 
@@ -87,7 +88,8 @@ export function MasterCabinet() {
 
       const filtered = stock.filter(i => 
         i.category === 'ready' || 
-        i.category === 'cases_empty'
+        i.category === 'cases_empty' ||
+        i.category === 'finished_main'
       )
       const grouped = filtered.reduce((acc, item) => {
         const cleanSku = item.sku.trim()
@@ -97,11 +99,13 @@ export function MasterCabinet() {
             name: item.name,
             ready: 0,
             cases: 0,
+            warehouse_qty: 0,
             category: parseCategory(cleanSku)
           }
         }
         if (item.category === 'ready') acc[cleanSku].ready = item.qty
         if (item.category === 'cases_empty') acc[cleanSku].cases = item.qty
+        if (item.category === 'finished_main') acc[cleanSku].warehouse_qty = item.qty
         return acc
       }, {} as Record<string, UnifiedStock>)
 
@@ -575,35 +579,29 @@ export function MasterCabinet() {
                     {isOpen ? <ChevronUp className="text-white/20" /> : <ChevronDown className="text-white/20" />}
                   </button>
                   {isOpen && (
-                    <div className="p-3 space-y-3 animate-in slide-in-from-top-2 duration-300">
-                      {catItems.length === 0 ? <div className="text-center py-6 text-white/20 text-sm italic">Немає даних</div> :
-                        catItems.sort((a, b) => a.sku.localeCompare(b.sku)).map(item => (
-                          <Card key={item.sku} className="bg-white/[0.03] border-white/5">
-                            <div className="p-3 flex items-center justify-between gap-4">
-                              <div className="flex flex-col">
-                                <span className="text-xs font-bold text-white leading-tight uppercase mb-0.5">{item.name.replace(/Гриль|Кейс/gi, '').trim()}</span>
-                                <span className="text-[10px] text-white/40 font-mono tracking-wider">{item.sku}</span>
+                    <div className="animate-in slide-in-from-top-2 duration-300">
+                      {catItems.length === 0 ? (
+                        <div className="text-center py-6 text-white/20 text-sm italic">Немає даних</div>
+                      ) : (
+                        <>
+                          <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-2 p-3 bg-white/5 border-b border-white/5 text-[10px] font-mono text-white/40 uppercase items-center">
+                            <span>Модель</span>
+                            <span className="text-center">Кейси</span>
+                            <span className="text-center">Готові</span>
+                            <span className="text-center">Склад</span>
+                          </div>
+                          <div className="divide-y divide-white/5">
+                            {catItems.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { numeric: true, sensitivity: 'base' })).map(item => (
+                              <div key={item.sku} className="grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-2 p-3 items-center">
+                                <span className="text-sm font-mono text-white/80 break-words pr-2">{item.name}</span>
+                                <span className="text-center text-[#c9963a] font-mono text-sm">{item.cases}</span>
+                                <span className="text-center text-[#c9963a] font-mono text-sm">{item.ready}</span>
+                                <span className="text-center text-[#c9963a] font-mono text-sm">{item.warehouse_qty}</span>
                               </div>
-                              <div className="flex items-center gap-4">
-                                <div className="flex flex-col items-center">
-                                  <div className="flex items-center gap-1 mb-0.5">
-                                    <Box className="w-3 h-3 text-orange-500/50" />
-                                    <span className={`text-lg font-display ${item.cases === 0 ? 'text-white/20' : 'text-white'}`}>{item.cases}</span>
-                                  </div>
-                                  <span className="text-[8px] text-white/30 uppercase font-bold tracking-tighter">Кейси</span>
-                                </div>
-                                <div className="w-[1px] h-8 bg-white/5" />
-                                <div className="flex flex-col items-center">
-                                  <div className="flex items-center gap-1 mb-0.5">
-                                    <Package className="w-3 h-3 text-green-500/50" />
-                                    <span className={`text-lg font-display ${item.ready === 0 ? 'text-white/20' : 'text-white'}`}>{item.ready}</span>
-                                  </div>
-                                  <span className="text-[8px] text-white/30 uppercase font-bold tracking-tighter">Готові</span>
-                                </div>
-                              </div>
-                            </div>
-                          </Card>
-                        ))}
+                            ))}
+                          </div>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

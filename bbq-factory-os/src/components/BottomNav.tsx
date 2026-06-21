@@ -11,8 +11,6 @@ interface NavItem {
 }
 
 const COMMON_ITEMS: NavItem[] = [
-  { path: '/',          icon: Home, label: 'Головна',  roles: ['driver'] },
-  { path: '/warehouse', icon: Package, label: 'Склад',    roles: ['driver'], badge: 2 },
   { path: '/tasker',    icon: Truck,   label: 'Таскер',   roles: ['driver'], badge: 1 },
 ]
 

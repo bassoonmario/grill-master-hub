@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Spinner, StatusTag } from '@/components/UI'
 import { api, IncomingTask } from '@/lib/api'
-import { Plus, ClipboardList, Archive, Send, Package, MessageSquare, AlertCircle, ChevronRight, CheckCircle2 } from 'lucide-react'
+import { Plus, ClipboardList, Archive, Send, Package, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 
 type TabKey = 'create' | 'active' | 'archive'
 type TaskType = 'supply' | 'internal' | 'simple'
@@ -22,6 +22,13 @@ export function AdminTasker() {
   const [itemsList, setItemsList] = useState<string[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [packagingLoading, setPackagingLoading] = useState(false)
+
+  // Редагування карток у вкладці 'Активні'
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
+  const [editItem, setEditItem] = useState('')
+  const [editQty, setEditQty] = useState('')
+  const [editComment, setEditComment] = useState('')
+  const [isSavingEdit, setIsSavingEdit] = useState(false)
 
   const loadTasks = useCallback(async (filter?: string) => {
     setLoading(true)
@@ -52,13 +59,12 @@ export function AdminTasker() {
     }
   }, [taskType])
 
-  useEffect(() => {
-    if (tab === 'create') {
-      loadItems()
-    } else if (tab === 'active') {
-      loadTasks()
-    }
-  }, [tab, loadTasks, loadItems])
+ useEffect(() => {
+  loadItems()
+  if (tab === 'active') {
+    loadTasks()
+  }
+}, [tab, loadTasks, loadItems])
 
   const loadPackaging = useCallback(async (itemId: string) => {
     if (!itemId) {
@@ -144,6 +150,40 @@ export function AdminTasker() {
     } catch (e) {
       console.error(e)
       setError('Помилка оновлення статусу')
+    }
+  }
+
+  const startEdit = (task: IncomingTask) => {
+    setEditingTaskId(task.id)
+    setEditItem(task.item_id ?? '')
+    setEditQty(task.target_qty != null ? String(task.target_qty) : '')
+    setEditComment(task.admin_comment ?? '')
+  }
+
+  const cancelEdit = () => {
+    setEditingTaskId(null)
+    setEditItem('')
+    setEditQty('')
+    setEditComment('')
+  }
+
+  const handleSaveEdit = async (task: IncomingTask) => {
+    setIsSavingEdit(true)
+    try {
+      const body: { item_id?: string; target_qty?: number; admin_comment?: string } = {}
+      if (!task.is_simple) {
+        if (editItem !== (task.item_id ?? '')) body.item_id = editItem
+        if (editQty !== String(task.target_qty ?? '')) body.target_qty = parseInt(editQty) || 0
+      }
+      if (editComment !== (task.admin_comment ?? '')) body.admin_comment = editComment
+      await api.updateIncomingTask(task.id, body)
+      cancelEdit()
+      loadTasks()
+    } catch (e) {
+      console.error(e)
+      setError('Помилка збереження')
+    } finally {
+      setIsSavingEdit(false)
     }
   }
 
@@ -319,7 +359,7 @@ export function AdminTasker() {
                   <p className="text-white/30 font-mono text-xs uppercase">Немає активних завдань</p>
                 </div>
               ) : (
-                tasks.filter(t => t.status !== 'архів').map(task => (
+                tasks.filter(t => t.status !== 'архів' && t.status !== 'прийнято').map(task => (
                   <div key={task.id} className="bg-[#121212] border border-white/10 rounded-xl p-4 space-y-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
@@ -336,7 +376,15 @@ export function AdminTasker() {
                           <p className="text-white/50 font-mono text-xs mt-1 break-words">{task.admin_comment}</p>
                         )}
                       </div>
-                      <span className="text-[9px] font-mono text-white/20 flex-shrink-0">{task.created_at}</span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-[9px] font-mono text-white/20">{task.created_at}</span>
+                        <button
+                          onClick={() => editingTaskId === task.id ? cancelEdit() : startEdit(task)}
+                          className="p-1.5 rounded-lg bg-white/5 text-white/30 hover:text-[#c9963a] hover:bg-[#c9963a]/10 transition-colors"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
 
                     {task.driver_comment && (
@@ -346,34 +394,62 @@ export function AdminTasker() {
                       </div>
                     )}
 
-                    <div className="flex gap-2 pt-1">
-                      {task.status === 'очікується' && (
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'в роботі')}
-                          className="flex-1 bg-[#c9963a]/10 border border-[#c9963a]/30 text-[#c9963a] py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider hover:bg-[#c9963a]/20 transition-colors flex items-center justify-center gap-1.5"
-                        >
-                          <ChevronRight className="w-3 h-3" />
-                          В роботу
-                        </button>
-                      )}
-                      {(task.status === 'очікується' || task.status === 'в роботі') && (
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'прийнято')}
-                          className="flex-1 bg-green-900/10 border border-green-900/30 text-green-500 py-2 rounded-lg font-mono text-[10px] uppercase tracking-wider hover:bg-green-900/20 transition-colors flex items-center justify-center gap-1.5"
-                        >
-                          <CheckCircle2 className="w-3 h-3" />
-                          Прийнято
-                        </button>
-                      )}
-                      {task.status !== 'архів' && (
-                        <button
-                          onClick={() => handleStatusChange(task.id, 'архів')}
-                          className="bg-white/5 border border-white/10 text-white/30 py-2 px-3 rounded-lg font-mono text-[10px] uppercase tracking-wider hover:bg-white/10 transition-colors"
-                        >
-                          <Archive className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
+                    {editingTaskId === task.id && (
+                      <div className="space-y-3 pt-1 border-t border-white/5">
+                        {!task.is_simple && (
+                          <>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Артикул</label>
+                              <select
+                                value={editItem}
+                                onChange={e => setEditItem(e.target.value)}
+                                className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-2.5 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors appearance-none"
+                              >
+                                <option value="">Оберіть артикул...</option>
+                                {itemsList.map(it => (
+                                  <option key={it} value={it}>{it}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[9px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Кількість</label>
+                              <input
+                                type="number"
+                                value={editQty}
+                                onChange={e => setEditQty(e.target.value)}
+                                className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-2.5 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                              />
+                            </div>
+                          </>
+                        )}
+                        <div>
+                          <label className="text-[9px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">
+                            {task.is_simple ? 'Текст доручення' : 'Коментар адміна'}
+                          </label>
+                          <textarea
+                            value={editComment}
+                            onChange={e => setEditComment(e.target.value)}
+                            rows={2}
+                            className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-2.5 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors resize-none"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={cancelEdit}
+                            className="flex-1 py-2 rounded-lg border border-white/10 text-white/40 font-mono text-[10px] uppercase tracking-wider hover:bg-white/5 transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <X className="w-3 h-3" /> Скасувати
+                          </button>
+                          <button
+                            onClick={() => handleSaveEdit(task)}
+                            disabled={isSavingEdit}
+                            className="flex-[2] py-2 rounded-lg bg-[#c9963a]/15 border border-[#c9963a]/30 text-[#c9963a] font-mono text-[10px] uppercase tracking-wider hover:bg-[#c9963a]/25 transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+                          >
+                            <Check className="w-3 h-3" /> Зберегти
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))
               )}
