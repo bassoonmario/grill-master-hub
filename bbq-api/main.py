@@ -145,6 +145,12 @@ class IncomingTaskUpdate(BaseModel):
     target_qty: Optional[int] = None
     admin_comment: Optional[str] = None
 
+class WriteOffResult(BaseModel):
+    success: bool
+    written_off_count: int
+    errors: list
+    details: list
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -687,10 +693,10 @@ async def create_incoming_task(body: IncomingTaskCreate):
         effective_qty = body.target_qty or 0
 
         new_id = await p.fetchval("""
-            INSERT INTO bot_workshop.incoming_tasks (item_id, target_qty, status, admin_comment, is_simple)
-            VALUES ($1, $2, 'очікується', $3, $4)
+            INSERT INTO bot_workshop.incoming_tasks (item_id, target_qty, status, admin_comment, is_simple, task_type)
+            VALUES ($1, $2, 'очікується', $3, $4, $5)
             RETURNING id
-        """, effective_item_id, effective_qty, body.admin_comment, is_simple)
+        """, effective_item_id, effective_qty, body.admin_comment, is_simple, body.task_type)
 
         if not is_simple and body.item_id and (body.pcs_per_pack or body.packs_per_box or body.pcs_per_box):
             pcs = body.pcs_per_pack or 0
@@ -996,3 +1002,155 @@ async def get_driver_tasks_done():
         return [dict(r) for r in rows]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/write-off")
+async def run_write_off(dry_run: bool = False):
+    p = await get_pool()
+    
+    SKIP = {'ГРАВІЮВАННЯ ШАМПУРІВ', 'ЧОХОЛ'}
+    DIRECT_OPERATIVE = {
+        'ЧОХОЛ М': 'Чохол М',
+        'ЧОХОЛ В': 'Чохол В', 
+        'ПИЛЬНИК': 'ПИЛЬНИК',
+        'ДОЩЕЧКА': 'дощечка',
+    }
+    
+    details = []
+    errors = []
+    
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                # Отримуємо всі незаписані відправки
+                shipments = await conn.fetch("""
+                    SELECT id, article, quantity, is_case
+                    FROM bot_workshop.daily_shipments
+                    WHERE is_written_off = false
+                    ORDER BY report_date, id
+                """)
+                
+                if not shipments:
+                    return {"success": True, "written_off_count": 0, "errors": [], "details": ["Немає записів для списання"]}
+                
+                for row in shipments:
+                    s_id = row['id']
+                    raw_article = row['article'].strip().upper()
+                    qty = row['quantity']
+                    is_case = row['is_case']
+                    
+                    # Нормалізація артикулу (кирилиця С → латиниця S)
+                    article = raw_article
+                    if len(raw_article) <= 5:  # G12, T1С, G17S — короткі
+                        article = raw_article.replace('С', 'S')
+                    
+                    # 1. Пропускаємо послуги
+                    if article in SKIP:
+                        details.append(f"Пропущено (послуга): {article}")
+                        continue
+                    
+                    # 2. Прямі позиції з inventory_operative
+                    if article in DIRECT_OPERATIVE:
+                        item_id = DIRECT_OPERATIVE[article]
+                        await conn.execute("""
+                            UPDATE bot_workshop.inventory_operative
+                            SET quantity = quantity - $1
+                            WHERE item_id = $2
+                        """, qty, item_id)
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_direct')
+                        """, item_id, -qty)
+                        details.append(f"Списано {qty} з operative: {item_id}")
+                        continue
+                    
+                    # 3. Визначаємо base_article (без H і T суфіксів, крім T1/T1S)
+                    base_article = article
+                    if not article.startswith('T1'):
+                        base_article = article.replace('H', '').replace('T', '')
+                    
+                    # 4. Якщо це кейс — списуємо з inventory_cases + recipes_cases + recipes
+                    if is_case:
+                        # 4a. Списуємо сам кейс
+                        result = await conn.execute("""
+                            UPDATE bot_workshop.inventory_cases
+                            SET quantity = quantity - $1
+                            WHERE item_id = $2
+                        """, qty, base_article)
+                        
+                        # 4b. Списуємо компоненти кейсу з cases_components
+                        case_components = await conn.fetch("""
+                            SELECT rc.component_id, rc.items_per_case, cc.component_name
+                            FROM bot_workshop.recipes_cases rc
+                            JOIN bot_workshop.cases_components cc ON cc.id = rc.component_id
+                            WHERE rc.case_sku = $1
+                        """, base_article)
+                        
+                        for comp in case_components:
+                            comp_qty = int(comp['items_per_case'] * qty)
+                            await conn.execute("""
+                                UPDATE bot_workshop.cases_components
+                                SET quantity = quantity - $1
+                                WHERE id = $2
+                            """, comp_qty, comp['component_id'])
+                        
+                        # 4c. Списуємо вміст з inventory_operative
+                        recipe = await conn.fetch("""
+                            SELECT item_id, quantity
+                            FROM bot_workshop.recipes
+                            WHERE UPPER(set_id) = $1
+                        """, base_article)
+                        
+                        for ing in recipe:
+                            await conn.execute("""
+                                UPDATE bot_workshop.inventory_operative
+                                SET quantity = quantity - $1
+                                WHERE item_id = $2
+                            """, ing['quantity'] * qty, ing['item_id'])
+                        
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_assembly')
+                        """, base_article, -qty)
+                        details.append(f"Зібрано {qty} наборів {base_article}")
+                    
+                    else:
+                        # 5. Не кейс — шукаємо рецепт в recipes
+                        recipe = await conn.fetch("""
+                            SELECT item_id, quantity
+                            FROM bot_workshop.recipes
+                            WHERE UPPER(set_id) = $1
+                        """, base_article)
+                        
+                        if recipe:
+                            for ing in recipe:
+                                await conn.execute("""
+                                    UPDATE bot_workshop.inventory_operative
+                                    SET quantity = quantity - $1
+                                    WHERE item_id = $2
+                                """, ing['quantity'] * qty, ing['item_id'])
+                            await conn.execute("""
+                                INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                                VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_box')
+                            """, base_article, -qty)
+                            details.append(f"Списано {qty} ящиків {base_article}")
+                        else:
+                            errors.append(f"Рецепт не знайдено: {base_article} (id={s_id})")
+                
+                # Позначаємо як списані
+                if not dry_run:
+                    await conn.execute("""
+                        UPDATE bot_workshop.daily_shipments
+                        SET is_written_off = true
+                        WHERE is_written_off = false
+                    """)
+                else:
+                    # dry_run — відкатуємо транзакцію
+                    raise Exception("DRY_RUN")
+                    
+    except Exception as e:
+        if str(e) == "DRY_RUN":
+            return {"success": True, "dry_run": True, "written_off_count": len(details), "errors": errors, "details": details}
+        errors.append(str(e))
+        return {"success": False, "written_off_count": 0, "errors": errors, "details": details}
+    
+    return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}        
