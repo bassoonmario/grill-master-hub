@@ -62,6 +62,9 @@ export interface StockItem {
   unit: string
   status: 'ok' | 'low' | 'critical'
   category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished'
+  min_limit?: number
+  unit_type?: string
+  conversion_factor?: number
 }
 
 export interface Task {
@@ -150,6 +153,10 @@ export interface NotificationAlert {
   item_id: string
   quantity: number
   limit_val: number
+  is_internal?: boolean
+  id?: string
+  unit_type?: string
+  conversion_factor?: number
 }
 
 export interface IncomingTask {
@@ -180,6 +187,10 @@ export interface DriverTask {
   packs_per_box?: number
   pcs_per_box?: number
   task_type?: string
+  component_id?: number
+  input_qty?: number
+  unit_type?: string
+  conversion_factor?: number
 }
 
 export interface ReplenishAlert {
@@ -228,7 +239,10 @@ export const api = {
       qty: item.quantity,
       unit: 'од',
       status: item.status,
-      category: item.category === 'finished' ? 'ready' : item.category
+      category: item.category === 'finished' ? 'ready' : item.category,
+      min_limit: item.min_limit,
+      unit_type: item.unit_type,
+      conversion_factor: item.conversion_factor,
     })) as StockItem[]
   },
 
@@ -401,4 +415,10 @@ export const api = {
 
   confirmReplenish: (alertId: number) =>
     post<{ status: string }>(`/api/master/replenish/${alertId}/confirm`, {}),
+
+  replenishComponent: (component_id: number, input_value: number, warehouse?: string) =>
+    post<{ success: boolean; added_qty: number; new_quantity: number }>(
+      `/api/admin/components/${component_id}/replenish`,
+      { input_value, warehouse }
+    ),
 }

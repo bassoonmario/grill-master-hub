@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, status, BackgroundTasks, Body
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -189,7 +189,7 @@ async def get_stock():
     try:
         rows = await p.fetch("""
             SELECT item_id::text, item_name AS name, quantity::float,
-                min_limit::float,
+                min_limit::float, NULL::text AS unit_type, NULL::float AS conversion_factor,
                 CASE
                     WHEN min_limit IS NULL         THEN 'ok'
                     WHEN quantity <= 0             THEN 'critical'
@@ -198,17 +198,18 @@ async def get_stock():
                     ELSE 'ok'
                 END AS status, 'main' AS category
             FROM bot_workshop.inventory_main
-            
+
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, 'ok' AS status, 'finished' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'finished' AS category
             FROM bot_workshop.inventory_finished
-            
+
             UNION ALL
-            SELECT item_id::text, item_name, quantity::float, NULL::float, 'ok' AS status, 'operative' AS category
+            SELECT item_id::text, item_name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'operative' AS category
             FROM bot_workshop.inventory_operative
-            
+
             UNION ALL
             SELECT id::text AS item_id, component_name AS name, quantity::float, min_threshold::float AS min_limit,
+                unit_type, conversion_factor,
                 CASE
                     WHEN min_threshold IS NULL         THEN 'ok'
                     WHEN quantity <= 0                 THEN 'critical'
@@ -217,15 +218,15 @@ async def get_stock():
                     ELSE 'ok'
                 END AS status, 'cases' AS category
             FROM bot_workshop.cases_components
-            
+
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, min_limit::float, 'ok' AS status, 'cases_empty' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float, min_limit::float, NULL::text, NULL::float, 'ok' AS status, 'cases_empty' AS category
             FROM bot_workshop.inventory_cases
-            
+
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, 'ok' AS status, 'finished_main' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'finished_main' AS category
             FROM bot_workshop.inventory_finished_main
-            
+
             ORDER BY category, item_id
         """)
         return [dict(r) for r in rows]
@@ -606,26 +607,26 @@ async def get_notifications(role: Optional[str] = None):
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT 'inventory_main' AS source, item_id, quantity::float, min_limit::float AS limit_val 
-            FROM bot_workshop.inventory_main 
+            SELECT 'inventory_main' AS source, item_id, quantity::float, min_limit::float AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
+            FROM bot_workshop.inventory_main
             WHERE min_limit IS NOT NULL AND quantity <= min_limit
-            
+
             UNION ALL
-            
-            SELECT 'inventory_operative' AS source, item_id, quantity::float, min_limit::float AS limit_val 
-            FROM bot_workshop.inventory_operative 
+
+            SELECT 'inventory_operative' AS source, item_id, quantity::float, min_limit::float AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
+            FROM bot_workshop.inventory_operative
             WHERE min_limit IS NOT NULL AND quantity <= min_limit
-            
+
             UNION ALL
-            
-            SELECT 'cases_components' AS source, component_name AS item_id, quantity::float, min_threshold::float AS limit_val 
-            FROM bot_workshop.cases_components 
+
+            SELECT 'cases_components' AS source, component_name AS item_id, quantity::float, min_threshold::float AS limit_val, is_internal, id::text, unit_type, conversion_factor
+            FROM bot_workshop.cases_components
             WHERE min_threshold IS NOT NULL AND quantity <= min_threshold
-            
+
             UNION ALL
-            
-            SELECT 'defects' AS source, sku AS item_id, 0 AS quantity, 0 AS limit_val 
-            FROM bot_workshop.defects 
+
+            SELECT 'defects' AS source, sku AS item_id, 0 AS quantity, 0 AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
+            FROM bot_workshop.defects
             WHERE status != 'fixed'
         """)
         return [dict(r) for r in rows]
@@ -841,6 +842,51 @@ async def update_admin_inventory(body: InventoryUpdate):
         print(f"Error in PATCH /api/admin/inventory: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/admin/components/{component_id}/replenish")
+async def replenish_component(component_id: int, body: dict = Body(...)):
+    input_value = float(body.get("input_value", 0))
+    warehouse = body.get("warehouse")
+    if input_value <= 0:
+        raise HTTPException(status_code=400, detail="input_value must be > 0")
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                comp = await conn.fetchrow("""
+                    SELECT component_name, unit_type, conversion_factor, is_internal
+                    FROM bot_workshop.cases_components WHERE id = $1
+                """, component_id)
+                if not comp:
+                    raise HTTPException(status_code=404, detail="Component not found")
+
+                qty_to_add = round(input_value * float(comp["conversion_factor"] or 1))
+
+                if warehouse and not comp["is_internal"]:
+                    task_type = "supply" if warehouse == "main" else "internal"
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.incoming_tasks
+                        (item_id, target_qty, actual_qty, status, task_type, component_id, input_qty, unit_type, conversion_factor)
+                        VALUES ($1, $2, 0, 'очікується', $3, $4, $5, $6, $7)
+                    """, comp["component_name"], qty_to_add, task_type, component_id,
+                        input_value, comp["unit_type"], comp["conversion_factor"])
+                    return {"success": True, "mode": "task_created", "qty_to_add": qty_to_add}
+                else:
+                    await conn.execute("""
+                        UPDATE bot_workshop.cases_components
+                        SET quantity = quantity + $1, last_updated = CURRENT_TIMESTAMP
+                        WHERE id = $2
+                    """, qty_to_add, component_id)
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                        VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'replenish_component')
+                    """, comp["component_name"], qty_to_add)
+                    return {"success": True, "mode": "direct", "added_qty": qty_to_add}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/admin/components/{component_id}/replenish: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/driver/tasks")
 async def get_driver_tasks():
     p = await get_pool()
@@ -849,6 +895,7 @@ async def get_driver_tasks():
             SELECT it.id, it.item_id, it.target_qty, it.actual_qty, it.status,
                    it.admin_comment, it.driver_comment, it.is_simple, it.created_at,
                    it.task_type,
+                   it.component_id, it.input_qty, it.unit_type, it.conversion_factor,
                    pr.pcs_per_pack, pr.packs_per_box, pr.pcs_per_box
             FROM bot_workshop.incoming_tasks it
             LEFT JOIN bot_workshop.packaging_rules pr ON pr.item_id = it.item_id
@@ -865,26 +912,41 @@ async def deliver_task(task_id: int, body: TaskDelivery):
     try:
         async with p.acquire() as conn:
             async with conn.transaction():
+                # Отримуємо дані таски (component_id для фурнітури)
+                task_info = await conn.fetchrow("""
+                    SELECT item_id, component_id FROM bot_workshop.incoming_tasks WHERE id = $1
+                """, task_id)
+
                 # Записуємо рядок доставки
                 await conn.execute("""
                     INSERT INTO bot_workshop.task_deliveries
                         (task_id, item_id, destination, qty, delivered_at, actual_pcs_per_pack, actual_packs_per_box)
-                    VALUES ($1, (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $1), $2, $3, CURRENT_TIMESTAMP, $4, $5)
-                """, task_id, body.destination, body.qty, body.actual_pcs_per_pack, body.actual_packs_per_box)
+                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, $5, $6)
+                """, task_id, task_info['item_id'], body.destination, body.qty, body.actual_pcs_per_pack, body.actual_packs_per_box)
 
                 # Оновлюємо залишки у відповідній таблиці
-                if body.destination == 'main':
+                if task_info['component_id']:
+                    await conn.execute("""
+                        UPDATE bot_workshop.cases_components
+                        SET quantity = quantity + $1, last_updated = CURRENT_TIMESTAMP
+                        WHERE id = $2
+                    """, body.qty, task_info['component_id'])
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                        VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'replenish_component')
+                    """, task_info['item_id'], body.qty)
+                elif body.destination == 'main':
                     await conn.execute("""
                         UPDATE bot_workshop.inventory_main
                         SET quantity = quantity + $1, last_update = CURRENT_TIMESTAMP
-                        WHERE item_id = (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $2)
-                    """, body.qty, task_id)
+                        WHERE item_id = $2
+                    """, body.qty, task_info['item_id'])
                 elif body.destination == 'operative':
                     await conn.execute("""
                         UPDATE bot_workshop.inventory_operative
                         SET quantity = quantity + $1
-                        WHERE item_id = (SELECT item_id FROM bot_workshop.incoming_tasks WHERE id = $2)
-                    """, body.qty, task_id)
+                        WHERE item_id = $2
+                    """, body.qty, task_info['item_id'])
 
                 # Рахуємо суму всіх доставок по тасці
                 total = await conn.fetchval("""

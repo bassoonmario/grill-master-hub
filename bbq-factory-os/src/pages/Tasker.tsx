@@ -5,6 +5,11 @@ import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Ar
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
+const unitLabel = (unit_type?: string) => {
+  const labels: Record<string, string> = { pcs: 'шт', kg: 'кг', roll: 'мотків', strip: 'полосок' }
+  return labels[unit_type || 'pcs'] || 'шт'
+}
+
 function statusToTag(status: string): 'new' | 'progress' | 'done' | 'pending' {
   if (status === 'done' || status === 'completed') return 'done'
   if (status === 'in_progress' || status === 'progress') return 'progress'
@@ -299,11 +304,13 @@ function DeliveryTaskCard({
 }: {
   task: DriverTask; onRefresh: () => void; isDone: boolean
 }) {
+  const isComponent = !!task.component_id
+
   const [open, setOpen]               = useState(false)
   const [destination, setDest]        = useState<'main' | 'operative'>(
     task.task_type === 'internal' ? 'operative' : 'main'
   )
-  const [qty, setQty]                 = useState('')
+  const [qty, setQty]                 = useState(isComponent ? String(task.target_qty) : '')
   const [loading, setLoading]         = useState(false)
   const [err, setErr]                 = useState<string | null>(null)
   const [useCustomPack, setCustomPack] = useState(false)
@@ -313,10 +320,10 @@ function DeliveryTaskCard({
   const plannedPcs      = task.pcs_per_pack  ?? 0
   const plannedPacks    = task.packs_per_box ?? 0
   const plannedPcsPerBox = task.pcs_per_box  ?? 0
-  const hasPlanned      = plannedPcs > 0 || plannedPacks > 0 || plannedPcsPerBox > 0
+  const hasPlanned      = !isComponent && (plannedPcs > 0 || plannedPacks > 0 || plannedPcsPerBox > 0)
 
-  const displayUnit = (plannedPacks > 0 || plannedPcsPerBox > 0) ? 'boxes' : plannedPcs > 0 ? 'packs' : 'units'
-  const unitLabel   = displayUnit === 'boxes' ? 'ящики' : displayUnit === 'packs' ? 'пачки' : 'шт'
+  const displayUnit    = (plannedPacks > 0 || plannedPcsPerBox > 0) ? 'boxes' : plannedPcs > 0 ? 'packs' : 'units'
+  const packUnitLabel  = displayUnit === 'boxes' ? 'ящики' : displayUnit === 'packs' ? 'пачки' : 'шт'
 
   const calcUnits = (inputVal: string): number => {
     const n = parseInt(inputVal, 10)
@@ -404,9 +411,9 @@ function DeliveryTaskCard({
             Прогрес
           </span>
           <span className="font-display text-lg" style={{ color: 'var(--orange)' }}>
-            {task.actual_qty}
+            {isComponent ? task.input_qty : task.actual_qty}
             <span className="font-mono text-[13px] text-[var(--text-dim)]">
-              /{task.target_qty}
+              {isComponent ? ` ${unitLabel(task.unit_type)}` : `/${task.target_qty}`}
             </span>
           </span>
         </div>
@@ -493,28 +500,30 @@ function DeliveryTaskCard({
                 ))}
               </div>
 
-              {/* Qty input */}
-              <div className="px-3 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                <span className="font-mono text-[11px] text-[var(--text-dim)] tracking-wider uppercase">
-                  Кількість ({unitLabel})
-                </span>
-                <div className="flex items-center gap-2 mt-1.5">
-                  <input
-                    type="number"
-                    min={1}
-                    value={qty}
-                    onChange={e => { setQty(e.target.value); setErr(null) }}
-                    placeholder="0"
-                    className="flex-1 bg-transparent font-mono text-xl text-right outline-none"
-                    style={{ color: 'var(--text)' }}
-                  />
-                  {displayUnit !== 'units' && qty && calcUnits(qty) > 0 && (
-                    <span className="font-mono text-[11px] whitespace-nowrap" style={{ color: 'var(--text-dim)' }}>
-                      = {calcUnits(qty)} шт
-                    </span>
-                  )}
+              {/* Qty input — прихований для фурнітури (qty pre-filled) */}
+              {!isComponent && (
+                <div className="px-3 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <span className="font-mono text-[11px] text-[var(--text-dim)] tracking-wider uppercase">
+                    Кількість ({packUnitLabel})
+                  </span>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <input
+                      type="number"
+                      min={1}
+                      value={qty}
+                      onChange={e => { setQty(e.target.value); setErr(null) }}
+                      placeholder="0"
+                      className="flex-1 bg-transparent font-mono text-xl text-right outline-none"
+                      style={{ color: 'var(--text)' }}
+                    />
+                    {displayUnit !== 'units' && qty && calcUnits(qty) > 0 && (
+                      <span className="font-mono text-[11px] whitespace-nowrap" style={{ color: 'var(--text-dim)' }}>
+                        = {calcUnits(qty)} шт
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Packaging */}
               {hasPlanned && (

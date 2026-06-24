@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Card, Spinner } from '@/components/UI'
-import { api, GlobalStat, NotificationAlert } from '@/lib/api'
-import { AlertTriangle, Plus, Check, Package } from 'lucide-react'
+import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
+import { api, NotificationAlert } from '@/lib/api'
+import { AlertTriangle, Plus, Check, Package, ChevronUp, ChevronDown } from 'lucide-react'
 
 export function AdminDashboard() {
-  const [stats, setStats] = useState<GlobalStat[]>([])
   const [alerts, setAlerts] = useState<NotificationAlert[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -18,15 +18,13 @@ export function AdminDashboard() {
   const [orderPcsPerBox, setOrderPcsPerBox]     = useState('')
   const [packagingLoading, setPackagingLoading] = useState(false)
   const [isSyncing, setIsSyncing]               = useState(false)
+  const [openAlertSection, setOpenAlertSection] = useState<string | null>(null)
+  const [replenishItem, setReplenishItem]       = useState<ReplenishItem | null>(null)
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [s, a] = await Promise.all([
-        api.getGlobalStats(),
-        api.getNotifications()
-      ])
-      setStats(s)
+      const a = await api.getNotifications()
       setAlerts(a)
     } catch (e) {
       console.error(e)
@@ -102,82 +100,159 @@ export function AdminDashboard() {
     }
   }
 
+  const skladAlerts     = alerts.filter(al => al.source === 'inventory_main')
+  const furnitureAlerts = alerts.filter(al => al.source === 'cases_components' && !al.is_internal)
+  const internalAlerts  = alerts.filter(al => al.source === 'cases_components' && al.is_internal)
+
+  const loadAlerts = loadData
+
   if (loading) return <Spinner />
 
   return (
     <div className="space-y-6">
       
       {/* СЕКЦІЯ: АЛЯРМИ */}
-      <div className="space-y-4">
+      <div className="space-y-2">
         <SectionTitle>Критичні сповіщення</SectionTitle>
-        {alerts.length === 0 ? (
-          <p className="text-xs text-[var(--text-dim)] font-mono py-4 uppercase">Все під контролем, алярмів немає.</p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {alerts.map((al, idx) => (
-              <Card key={idx} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4 flex flex-col justify-between shadow-[0_0_15px_rgba(201,150,58,0.05)]">
-                <div>
-                  <div className="flex justify-between items-start mb-2">
-                    <span className="text-[#c9963a] font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
-                      <AlertTriangle className="w-4 h-4" /> 
-                      {al.item_id}
-                    </span>
-                    <span className="text-[10px] font-mono text-white/40 uppercase bg-black/50 px-2 py-0.5 rounded border border-white/5">
-                      {formatSource(al.source)}
-                    </span>
-                  </div>
-                  {al.source === 'defects' ? (
-                    <p className="text-sm font-mono text-white/80 mt-2 mb-4">
-                      Зафіксовано неполадку. Очікує ремонту.
-                    </p>
-                  ) : (
-                    <p className="text-sm font-mono text-white/80 mt-2 mb-4">
-                      Залишок: <span className="text-red-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
-                    </p>
-                  )}
-                </div>
 
-                {al.source !== 'defects' && (
-                  <button
-                    onClick={() => openOrderModal(al)}
-                    className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all"
-                  >
-                    Замовити
-                  </button>
-                )}
-              </Card>
-            ))}
-          </div>
-        )}
+        {/* Акордеон 1: Склад */}
+        {(() => {
+          const count = skladAlerts.length
+          const isEmpty = count === 0
+          return (
+            <div>
+              <button
+                onClick={() => !isEmpty && setOpenAlertSection(openAlertSection === 'sklad' ? null : 'sklad')}
+                className={`w-full flex justify-between items-center p-4 rounded-xl border transition-colors ${isEmpty ? 'bg-[#0a0a0a] border-white/5 cursor-default' : 'bg-[#121212] border-white/10 hover:bg-[#1a1a1a]'}`}
+              >
+                <span className={`font-display text-lg uppercase tracking-wider ${isEmpty ? 'text-white/20' : 'text-white'}`}>
+                  Склад
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${isEmpty ? 'text-white/20 border-white/10' : 'text-[#c9963a] border-[#c9963a]/30 bg-[#c9963a]/10'}`}>
+                    {count}
+                  </span>
+                  {!isEmpty && (openAlertSection === 'sklad' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />)}
+                </div>
+              </button>
+              {openAlertSection === 'sklad' && (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {skladAlerts.map((al, idx) => (
+                    <Card key={idx} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="text-[#c9963a] font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
+                            <AlertTriangle className="w-4 h-4" />{al.item_id}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono text-white/80 mt-2 mb-4">
+                          Залишок: <span className="text-red-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
+                        </p>
+                      </div>
+                      <button onClick={() => openOrderModal(al)} className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
+                        Замовити
+                      </button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Акордеон 2: Фурнітура (is_internal = false) */}
+        {(() => {
+          const count = furnitureAlerts.length
+          const isEmpty = count === 0
+          return (
+            <div>
+              <button
+                onClick={() => !isEmpty && setOpenAlertSection(openAlertSection === 'furniture' ? null : 'furniture')}
+                className={`w-full flex justify-between items-center p-4 rounded-xl border transition-colors ${isEmpty ? 'bg-[#0a0a0a] border-white/5 cursor-default' : 'bg-[#121212] border-white/10 hover:bg-[#1a1a1a]'}`}
+              >
+                <span className={`font-display text-lg uppercase tracking-wider ${isEmpty ? 'text-white/20' : 'text-white'}`}>
+                  Фурнітура
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${isEmpty ? 'text-white/20 border-white/10' : 'text-[#c9963a] border-[#c9963a]/30 bg-[#c9963a]/10'}`}>
+                    {count}
+                  </span>
+                  {!isEmpty && (openAlertSection === 'furniture' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />)}
+                </div>
+              </button>
+              {openAlertSection === 'furniture' && (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {furnitureAlerts.map((al, idx) => (
+                    <Card key={idx} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4 flex flex-col justify-between">
+                      <div>
+                        <span className="text-[#c9963a] font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
+                          <AlertTriangle className="w-4 h-4" />{al.item_id}
+                        </span>
+                        <p className="text-sm font-mono text-white/80 mt-2 mb-4">
+                          Залишок: <span className="text-red-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
+                        </p>
+                      </div>
+                      <button onClick={() => setReplenishItem({ id: al.id ?? '', name: al.item_id, unit_type: al.unit_type || 'pcs', conversion_factor: al.conversion_factor || 1, is_internal: false })} className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
+                        Поповнити
+                      </button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Акордеон 3: Внутрішні (is_internal = true) */}
+        {(() => {
+          const count = internalAlerts.length
+          const isEmpty = count === 0
+          return (
+            <div>
+              <button
+                onClick={() => !isEmpty && setOpenAlertSection(openAlertSection === 'internal' ? null : 'internal')}
+                className={`w-full flex justify-between items-center p-4 rounded-xl border transition-colors ${isEmpty ? 'bg-[#0a0a0a] border-white/5 cursor-default' : 'bg-[#121212] border-white/10 hover:bg-[#1a1a1a]'}`}
+              >
+                <span className={`font-display text-lg uppercase tracking-wider ${isEmpty ? 'text-white/20' : 'text-white'}`}>
+                  Внутрішні
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${isEmpty ? 'text-white/20 border-white/10' : 'text-[#c9963a] border-[#c9963a]/30 bg-[#c9963a]/10'}`}>
+                    {count}
+                  </span>
+                  {!isEmpty && (openAlertSection === 'internal' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />)}
+                </div>
+              </button>
+              {openAlertSection === 'internal' && (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {internalAlerts.map((al, idx) => (
+                    <Card key={idx} className="bg-[#0f0f0f] border border-white/10 p-4 flex flex-col justify-between">
+                      <div>
+                        <span className="text-white/60 font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
+                          <AlertTriangle className="w-4 h-4 text-yellow-500" />{al.item_id}
+                        </span>
+                        <p className="text-sm font-mono text-white/80 mt-2 mb-4">
+                          Залишок: <span className="text-yellow-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
+                        </p>
+                      </div>
+                      <button onClick={() => setReplenishItem({ id: al.id ?? '', name: al.item_id, unit_type: al.unit_type || 'pcs', conversion_factor: al.conversion_factor || 1, is_internal: true })} className="w-full py-2 bg-white/5 hover:bg-white/10 text-white/60 border border-white/10 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
+                        Поповнити
+                      </button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
-      {/* СЕКЦІЯ: СТАТИСТИКА */}
-      <div className="space-y-4 pt-4">
-        <SectionTitle>Зарплатний фонд майстрів (Поточний місяць)</SectionTitle>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {stats.map(s => (
-            <Card key={s.master_name} className="bg-[#121212] border border-white/10 p-5 p-0">
-              <div className="p-4 border-b border-white/5">
-                <h3 className="text-white font-display text-lg uppercase tracking-wider">{s.master_name}</h3>
-              </div>
-              <div className="p-4 space-y-3">
-                <div className="flex justify-between items-center text-xs font-mono uppercase tracking-widest text-[var(--text-dim)]">
-                  <span>Цикл 01-15</span>
-                  <span className="text-white font-medium">{s.earn_1_15} ₴</span>
-                </div>
-                <div className="flex justify-between items-center text-xs font-mono uppercase tracking-widest text-[var(--text-dim)]">
-                  <span>Цикл 16-кін</span>
-                  <span className="text-white font-medium">{s.earn_16_end} ₴</span>
-                </div>
-                <div className="pt-3 mt-3 border-t border-white/5 flex justify-between items-center text-sm font-bold uppercase tracking-widest text-[#c9963a]">
-                  <span>Разом</span>
-                  <span>{s.total} ₴</span>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
+      <ReplenishModal
+        item={replenishItem}
+        onClose={() => setReplenishItem(null)}
+        onSuccess={loadAlerts}
+        showWarehouseSelect={!replenishItem?.is_internal}
+      />
 
       {/* МОДАЛКА ЗАМОВЛЕННЯ */}
       {orderingItem && (

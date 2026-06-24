@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Spinner } from '@/components/UI'
+import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
 import { api, StockItem } from '@/lib/api'
-import { ChevronDown, ChevronUp, Pencil, Check, X, AlertCircle } from 'lucide-react'
+import { ChevronDown, ChevronUp, Pencil, Check, X, AlertCircle, PlusCircle } from 'lucide-react'
 
 interface GrillRow {
   sku: string
@@ -19,10 +20,13 @@ interface WarehouseRow {
 }
 
 interface ComponentRow {
-  id: number
+  id: string
   sku: string
   name: string
   qty: number
+  min_threshold: number
+  unit_type: string
+  conversion_factor: number
 }
 
 export function AdminWarehouses() {
@@ -34,6 +38,7 @@ export function AdminWarehouses() {
   const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [isSyncing, setIsSyncing] = useState(false)
+  const [replenishModal, setReplenishModal] = useState<ReplenishItem | null>(null)
 
   const loadData = useCallback(async () => {
     try {
@@ -177,7 +182,15 @@ export function AdminWarehouses() {
       if (i.category === 'operative') entry.operative = i.qty
       if (i.category === 'main') entry.main = i.qty
     } else if (i.category === 'cases') {
-      componentsMap.set(i.sku, { id: i.id, sku: i.sku, name: i.name || i.sku, qty: i.qty })
+      componentsMap.set(i.sku, {
+        id: String(i.id),
+        sku: i.sku,
+        name: i.name || i.sku,
+        qty: i.qty,
+        min_threshold: i.min_limit || 0,
+        unit_type: i.unit_type || 'pcs',
+        conversion_factor: i.conversion_factor || 1,
+      })
     }
   })
 
@@ -324,9 +337,9 @@ export function AdminWarehouses() {
                 ) : (
                   <div className="divide-y divide-white/5">
                     {componentsList.map(row => (
-                      <div key={row.sku} className="p-4 flex items-center justify-between hover:bg-white/5 transition-colors">
+                      <div key={row.sku} className={`p-4 flex items-center justify-between hover:bg-white/5 transition-colors ${row.qty < row.min_threshold ? 'bg-red-900/10' : ''}`}>
                         <span className="text-sm font-mono text-white/80 pr-4">{row.name}</span>
-                        
+
                         <div className="flex flex-shrink-0">
                           {editingSku === row.sku ? (
                             <div className="flex items-center gap-2">
@@ -338,7 +351,15 @@ export function AdminWarehouses() {
                             </div>
                           ) : (
                             <div className="flex items-center gap-3">
-                              <span className="text-[#c9963a] font-mono text-sm">{row.qty}</span>
+                              <span className="text-[#c9963a] font-mono text-sm">
+                                {row.unit_type === 'roll'
+                                  ? `${(row.qty / row.conversion_factor).toFixed(1)} м`
+                                  : row.unit_type === 'kg'
+                                  ? `${(row.qty / row.conversion_factor).toFixed(2)} кг`
+                                  : `${row.qty} шт`
+                                }
+                              </span>
+                              <button onClick={() => setReplenishModal(row)} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-4 h-4" /></button>
                               <button onClick={() => startEditComponent(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-4 h-4" /></button>
                             </div>
                           )}
@@ -353,6 +374,12 @@ export function AdminWarehouses() {
 
         </div>
       )}
+
+      <ReplenishModal
+        item={replenishModal}
+        onClose={() => setReplenishModal(null)}
+        onSuccess={loadData}
+      />
     </div>
   )
 }
