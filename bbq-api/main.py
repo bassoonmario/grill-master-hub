@@ -1130,73 +1130,73 @@ async def run_write_off(dry_run: bool = False):
                     if not article.startswith('T1'):
                         base_article = article.replace('H', '').replace('T', '')
                     
-                    # 4. Якщо це кейс — списуємо з inventory_cases + recipes_cases + recipes
-                    if is_case:
-                        # 4a. Списуємо сам кейс
-                        result = await conn.execute("""
-                            UPDATE bot_workshop.inventory_cases
+                    # A. Перевіряємо inventory_finished
+                    finished_row = await conn.fetchrow("""
+                        SELECT quantity FROM bot_workshop.inventory_finished
+                        WHERE item_id = $1
+                    """, base_article)
+                    finished_qty = finished_row['quantity'] if finished_row else 0
+                    from_finished = min(finished_qty, qty)
+
+                    if from_finished > 0:
+                        await conn.execute("""
+                            UPDATE bot_workshop.inventory_finished
                             SET quantity = quantity - $1
                             WHERE item_id = $2
-                        """, qty, base_article)
-                        
-                        # 4b. Списуємо компоненти кейсу з cases_components
-                        case_components = await conn.fetch("""
-                            SELECT rc.component_id, rc.items_per_case, cc.component_name
-                            FROM bot_workshop.recipes_cases rc
-                            JOIN bot_workshop.cases_components cc ON cc.id = rc.component_id
-                            WHERE rc.case_sku = $1
-                        """, base_article)
-                        
-                        for comp in case_components:
-                            comp_qty = int(comp['items_per_case'] * qty)
-                            await conn.execute("""
-                                UPDATE bot_workshop.cases_components
-                                SET quantity = quantity - $1
-                                WHERE id = $2
-                            """, comp_qty, comp['component_id'])
-                        
-                        # 4c. Списуємо вміст з inventory_operative
-                        recipe = await conn.fetch("""
-                            SELECT item_id, quantity
-                            FROM bot_workshop.recipes
-                            WHERE UPPER(set_id) = $1
-                        """, base_article)
-                        
-                        for ing in recipe:
-                            await conn.execute("""
-                                UPDATE bot_workshop.inventory_operative
-                                SET quantity = quantity - $1
-                                WHERE item_id = $2
-                            """, ing['quantity'] * qty, ing['item_id'])
-                        
+                        """, from_finished, base_article)
                         await conn.execute("""
                             INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_assembly')
-                        """, base_article, -qty)
-                        details.append(f"Зібрано {qty} наборів {base_article}")
-                    
-                    else:
-                        # 5. Не кейс — шукаємо рецепт в recipes
-                        recipe = await conn.fetch("""
-                            SELECT item_id, quantity
-                            FROM bot_workshop.recipes
-                            WHERE UPPER(set_id) = $1
-                        """, base_article)
-                        
-                        if recipe:
+                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_finished')
+                        """, base_article, -from_finished)
+                        details.append(f"Списано {from_finished} з finished: {base_article}")
+
+                    remaining = qty - from_finished
+
+                    if remaining > 0:
+                        if is_case:
+                            # B. Кейс: inventory_cases (може йти в мінус) + recipes → inventory_operative
+                            await conn.execute("""
+                                UPDATE bot_workshop.inventory_cases
+                                SET quantity = quantity - $1
+                                WHERE item_id = $2
+                            """, remaining, base_article)
+                            recipe = await conn.fetch("""
+                                SELECT item_id, quantity
+                                FROM bot_workshop.recipes
+                                WHERE UPPER(set_id) = $1
+                            """, base_article)
                             for ing in recipe:
                                 await conn.execute("""
                                     UPDATE bot_workshop.inventory_operative
                                     SET quantity = quantity - $1
                                     WHERE item_id = $2
-                                """, ing['quantity'] * qty, ing['item_id'])
+                                """, ing['quantity'] * remaining, ing['item_id'])
                             await conn.execute("""
                                 INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                                VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_box')
-                            """, base_article, -qty)
-                            details.append(f"Списано {qty} ящиків {base_article}")
+                                VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_case')
+                            """, base_article, -remaining)
+                            details.append(f"Списано {remaining} кейсів {base_article} (cases+operative)")
                         else:
-                            errors.append(f"Рецепт не знайдено: {base_article} (id={s_id})")
+                            # C. Не кейс: recipes → inventory_operative
+                            recipe = await conn.fetch("""
+                                SELECT item_id, quantity
+                                FROM bot_workshop.recipes
+                                WHERE UPPER(set_id) = $1
+                            """, base_article)
+                            if recipe:
+                                for ing in recipe:
+                                    await conn.execute("""
+                                        UPDATE bot_workshop.inventory_operative
+                                        SET quantity = quantity - $1
+                                        WHERE item_id = $2
+                                    """, ing['quantity'] * remaining, ing['item_id'])
+                                await conn.execute("""
+                                    INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
+                                    VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_box')
+                                """, base_article, -remaining)
+                                details.append(f"Списано {remaining} ящиків {base_article}")
+                            else:
+                                errors.append(f"Рецепт не знайдено: {base_article} (id={s_id})")
                 
                 # Позначаємо як списані
                 if not dry_run:

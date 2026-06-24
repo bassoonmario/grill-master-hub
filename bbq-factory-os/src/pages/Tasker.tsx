@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, DriverTask } from '@/lib/api'
-import { SectionTitle, StatusTag, Spinner } from '@/components/UI'
+import { SectionTitle, StatusTag, Spinner, Tabs, EmptyState } from '@/components/UI'
 import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Archive } from 'lucide-react'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -104,33 +104,11 @@ export function Tasker() {
       {/* Loading */}
       {loading && <Spinner />}
 
-      {/* Empty */}
       {!loading && !error && tasks.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <ClipboardCheck size={36} style={{ color: 'var(--text-dim)' }} strokeWidth={1.2} />
-          <span className="font-mono text-[11px] tracking-widest text-[var(--text-dim)] uppercase">
-            Немає завдань
-          </span>
-        </div>
+        <EmptyState icon={<ClipboardCheck size={36} strokeWidth={1.2} />} text="Немає завдань" />
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-2 bg-[#0a0a0a] border border-white/5 rounded-xl p-1.5 mb-4">
-        {tabs.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-mono text-[11px] uppercase tracking-wider transition-all ${
-              tab === t.key
-                ? 'bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30'
-                : 'text-white/40 hover:text-white/60 border border-transparent'
-            }`}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={tabs} active={tab} onChange={k => setTab(k as 'active' | 'done')} variant="pill" />
 
       {/* List */}
       <div className="flex flex-col gap-3">

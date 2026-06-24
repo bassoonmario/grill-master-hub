@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { SectionTitle, Spinner, StatusTag } from '@/components/UI'
+import { SectionTitle, Spinner, StatusTag, Tabs } from '@/components/UI'
 import { api, IncomingTask } from '@/lib/api'
 import { Plus, ClipboardList, Archive, Send, Package, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 
@@ -215,35 +215,22 @@ export function AdminTasker() {
       <SectionTitle>Логістичний Таскер</SectionTitle>
 
       {error && (
-        <div className="bg-red-950/50 border border-red-900/50 text-red-200 p-4 rounded-xl flex items-center gap-3 text-sm font-mono shadow-lg">
-          <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+        <div className="p-4 rounded-xl flex items-center gap-3 text-sm font-mono border"
+          style={{ background: 'var(--red-dim)', borderColor: 'var(--red)', color: 'var(--red)' }}>
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
       {success && (
-        <div className="bg-green-950/50 border border-green-900/50 text-green-200 p-4 rounded-xl flex items-center gap-3 text-sm font-mono shadow-lg">
-          <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
+        <div className="p-4 rounded-xl flex items-center gap-3 text-sm font-mono border"
+          style={{ background: 'var(--green-dim)', borderColor: 'var(--green)', color: 'var(--green)' }}>
+          <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
           <span>{success}</span>
         </div>
       )}
 
-      <div className="flex gap-2 bg-[#0a0a0a] border border-white/5 rounded-xl p-1.5">
-        {tabs.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-mono text-xs uppercase tracking-wider transition-all ${
-              tab === t.key
-                ? 'bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30'
-                : 'text-white/40 hover:text-white/60 border border-transparent'
-            }`}
-          >
-            {t.icon}
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={tabs} active={tab} onChange={k => setTab(k as TabKey)} variant="pill" className="mb-0" />
 
       {tab === 'create' && (
         <div className="space-y-5">

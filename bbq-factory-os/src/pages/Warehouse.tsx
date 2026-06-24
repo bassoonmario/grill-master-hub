@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { api, StockItem } from '@/lib/api'
-import { SectionTitle, Spinner } from '@/components/UI'
+import { SectionTitle, Spinner, Tabs } from '@/components/UI'
 
 type Tab = 'main' | 'ready' | 'operative'
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'main',      label: 'Основний' },
-  { id: 'ready',     label: 'Готова продукція' },
-  { id: 'operative', label: 'Оперативний' },
+const TABS = [
+  { key: 'main',      label: 'Основний' },
+  { key: 'ready',     label: 'Готова продукція' },
+  { key: 'operative', label: 'Оперативний' },
 ]
 
 const STATUS_COLORS: Record<string, string> = {
@@ -26,23 +26,7 @@ export function Warehouse() {
 
   return (
     <div>
-      {/* Tabs */}
-      <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-none pb-1 -mx-1 px-1">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className="flex-shrink-0 font-mono text-[11px] tracking-wider px-4 py-2 rounded-full border transition-all cursor-pointer"
-            style={{
-              background:   tab === t.id ? 'var(--orange-dim)' : 'var(--surface)',
-              borderColor:  tab === t.id ? 'var(--orange)'     : 'var(--border)',
-              color:        tab === t.id ? 'var(--orange)'     : 'var(--text-dim)',
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={TABS} active={tab} onChange={k => setTab(k as Tab)} variant="chip" />
 
       {items.length === 0 && <Spinner />}
 

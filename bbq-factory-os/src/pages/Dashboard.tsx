@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api, DashboardData, Shipment, Defect } from '@/lib/api'
-import { StatCard, SectionTitle, ProgressBar, AlertBanner, Spinner } from '@/components/UI'
+import { StatCard, SectionTitle, ProgressBar, AlertBanner, Spinner, Tabs } from '@/components/UI'
 import { Target, RefreshCw, Truck, AlertTriangle } from 'lucide-react'
 
 type Tab = 'main' | 'shipments' | 'defects'
+
+const DASHBOARD_TABS = [
+  { key: 'main',      label: '📊 Головна' },
+  { key: 'shipments', label: '🚚 Відправки' },
+  { key: 'defects',   label: '⚠️ Брак продукції' },
+]
 
 export function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null)
@@ -25,24 +31,8 @@ export function Dashboard() {
   const pct = Math.round((data.plan_done / data.plan_total) * 100)
 
   return (
-    <div style={{ fontFamily: 'Rajdhani, sans-serif' }}>
-      {/* Вкладки перемикання меню */}
-      <div className="flex bg-surface border-b border-border mb-4">
-        {(['main', 'shipments', 'defects'] as Tab[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-3 text-sm font-bold uppercase tracking-wider text-center border-b-2 transition-all ${activeTab === tab
-                ? 'border-[var(--orange)] text-[var(--orange)] bg-white/[0.02]'
-                : 'border-transparent text-[var(--text-dim)] hover:text-[var(--text)]'
-              }`}
-          >
-            {tab === 'main' && '📊 Головна'}
-            {tab === 'shipments' && '🚚 Відправки'}
-            {tab === 'defects' && '⚠️ Брак продукції'}
-          </button>
-        ))}
-      </div>
+    <div>
+      <Tabs tabs={DASHBOARD_TABS} active={activeTab} onChange={k => setActiveTab(k as Tab)} variant="underline" />
 
       {activeTab === 'main' && (
         <div className="space-y-6 animate-fadeIn">

@@ -1,5 +1,98 @@
 import { ReactNode } from 'react'
 
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+export interface TabItem {
+  key: string
+  label: string
+  icon?: ReactNode
+}
+
+interface TabsProps {
+  tabs: TabItem[]
+  active: string
+  onChange: (key: string) => void
+  /**
+   * pill     — темний контейнер з пілюлями (Tasker, AdminTasker)
+   * underline — підкреслення знизу (Dashboard)
+   * chip     — скролювані округлі чіпи (Warehouse)
+   */
+  variant?: 'pill' | 'underline' | 'chip'
+  className?: string
+}
+
+export function Tabs({ tabs, active, onChange, variant = 'pill', className = '' }: TabsProps) {
+  if (variant === 'underline') {
+    return (
+      <div className={`flex bg-surface border-b border-border mb-4 ${className}`}>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-bold uppercase tracking-wider text-center border-b-2 transition-all ${
+              active === t.key
+                ? 'border-[var(--orange)] text-[var(--orange)] bg-white/[0.02]'
+                : 'border-transparent text-[var(--text-dim)] hover:text-[var(--text)]'
+            }`}
+          >
+            {t.icon}{t.label}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  if (variant === 'chip') {
+    return (
+      <div className={`flex gap-2 mb-4 overflow-x-auto scrollbar-none pb-1 -mx-1 px-1 ${className}`}>
+        {tabs.map(t => (
+          <button
+            key={t.key}
+            onClick={() => onChange(t.key)}
+            className="flex-shrink-0 flex items-center gap-1.5 font-mono text-[11px] tracking-wider px-4 py-2 rounded-full border transition-all cursor-pointer"
+            style={{
+              background:  active === t.key ? 'var(--orange-dim)' : 'var(--surface)',
+              borderColor: active === t.key ? 'var(--orange)'     : 'var(--border)',
+              color:       active === t.key ? 'var(--orange)'     : 'var(--text-dim)',
+            }}
+          >
+            {t.icon}{t.label}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  // pill (default)
+  return (
+    <div className={`flex gap-2 bg-[var(--void)] border border-white/5 rounded-xl p-1.5 mb-4 ${className}`}>
+      {tabs.map(t => (
+        <button
+          key={t.key}
+          onClick={() => onChange(t.key)}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg font-mono text-[11px] uppercase tracking-wider transition-all border ${
+            active === t.key
+              ? 'bg-[var(--orange-dim)] text-[var(--orange)] border-[var(--orange-mid)]'
+              : 'text-white/40 hover:text-white/60 border-transparent'
+          }`}
+        >
+          {t.icon}{t.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ─── EMPTY STATE ──────────────────────────────────────────────────────────────
+export function EmptyState({ icon, text = 'Нічого не знайдено' }: { icon?: ReactNode; text?: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-3">
+      {icon && <span className="text-[var(--text-dim)]">{icon}</span>}
+      <span className="font-mono text-[11px] tracking-widest text-[var(--text-dim)] uppercase">{text}</span>
+    </div>
+  )
+}
+
+
 // ─── STAT CARD ────────────────────────────────────────────────────────────────
 interface StatCardProps {
   icon: React.ReactNode // Адаптовано під JSX-компоненти lucide-react
