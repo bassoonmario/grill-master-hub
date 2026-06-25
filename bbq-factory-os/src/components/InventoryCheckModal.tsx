@@ -54,14 +54,14 @@ export function InventoryCheckModal({ item, onClose, onSuccess }: Props) {
         zIndex: 9999,
         background: 'rgba(0,0,0,0.75)',
         display: 'flex',
-        alignItems: 'flex-end',
+        alignItems: 'center',
         justifyContent: 'center',
       }}
       onClick={onClose}
     >
       <div
         style={{
-          borderRadius: '16px 16px 0 0',
+          borderRadius: '16px',
           padding: '20px',
           maxHeight: '90vh',
           overflowY: 'auto',
