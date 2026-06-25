@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Spinner } from '@/components/UI'
 import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
-import { api, StockItem } from '@/lib/api'
-import { ChevronDown, ChevronUp, Pencil, Check, X, AlertCircle, PlusCircle } from 'lucide-react'
+import { InventoryCheckModal, CheckModalItem } from '@/components/InventoryCheckModal'
+import { api, StockItem, LatestCheck } from '@/lib/api'
+import { ChevronDown, ChevronUp, Pencil, Check, X, AlertCircle, PlusCircle, ClipboardCheck } from 'lucide-react'
 
 interface GrillRow {
   sku: string
@@ -41,13 +42,26 @@ export function AdminWarehouses() {
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [isSyncing, setIsSyncing] = useState(false)
   const [replenishModal, setReplenishModal] = useState<ReplenishItem | null>(null)
+  const [checkModal, setCheckModal] = useState<CheckModalItem | null>(null)
+  const [checksMap, setChecksMap] = useState<Record<string, { delta: number; checked_at: string }>>({})
+
+  const openCheck = (name: string, item_id: string, table_key: string, system_qty: number) =>
+    setCheckModal({ name, item_id, table_key, system_qty })
 
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await api.stock()
+      const [data, checks] = await Promise.all([
+        api.stock(),
+        api.getLatestChecks().catch((): LatestCheck[] => []),
+      ])
       setItems(data || [])
+      const map: Record<string, { delta: number; checked_at: string }> = {}
+      for (const c of checks) {
+        map[`${c.table_key}:${c.item_id}`] = { delta: c.delta, checked_at: c.checked_at }
+      }
+      setChecksMap(map)
     } catch (e) {
       console.error(e)
       setError("Помилка завантаження складу")
@@ -219,8 +233,16 @@ export function AdminWarehouses() {
                     <div className="divide-y divide-white/5">
                       {grills.map(row => (
                         <div key={row.sku} className="grid grid-cols-[1.5fr_1fr_1fr_1fr_auto] gap-2 p-3 items-center hover:bg-white/5 transition-colors group">
-                          <span className="text-sm font-mono text-white/80 break-words pr-2">{row.name}</span>
-                          
+                          <div className="flex flex-col gap-0.5 pr-2">
+                            <span className="text-sm font-mono text-white/80 break-words">{row.name}</span>
+                            {(() => {
+                              const chk = checksMap[`cases_empty:${row.sku}`]
+                              if (!chk) return null
+                              const d = chk.delta
+                              return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                            })()}
+                          </div>
+
                           {editingSku === row.sku ? (
                             <>
                               <input type="number" value={editValues.cases_empty || ''} onChange={e => setEditValues(p => ({...p, cases_empty: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1.5 text-center text-white font-mono text-xs outline-none" />
@@ -236,7 +258,10 @@ export function AdminWarehouses() {
                               <span className="text-center text-[#c9963a] font-mono text-sm">{row.cases_empty}</span>
                               <span className="text-center text-[#c9963a] font-mono text-sm">{row.ready}</span>
                               <span className="text-center text-[#c9963a] font-mono text-sm">{row.finished_main}</span>
-                              <button onClick={() => startEditGrill(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
+                              <div className="flex items-center gap-0.5">
+                                <button onClick={() => openCheck(row.name, row.sku, 'cases_empty', row.cases_empty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                <button onClick={() => startEditGrill(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
+                              </div>
                             </>
                           )}
                         </div>
@@ -280,7 +305,15 @@ export function AdminWarehouses() {
                         const opColor = isCritical ? 'text-red-400' : isLow ? 'text-yellow-400' : 'text-[#c9963a]'
                         return (
                           <div key={row.sku} className={`grid grid-cols-[2fr_0.8fr_0.8fr_auto] gap-1.5 px-2.5 py-2 items-center hover:bg-white/5 transition-colors ${rowBg}`}>
-                            <span className="text-xs font-mono text-white/80 break-words pr-1">{row.name}</span>
+                            <div className="flex flex-col gap-0.5 pr-1">
+                              <span className="text-xs font-mono text-white/80 break-words">{row.name}</span>
+                              {(() => {
+                                const chk = checksMap[`operative:${row.sku}`]
+                                if (!chk) return null
+                                const d = chk.delta
+                                return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                              })()}
+                            </div>
 
                             {editingSku === row.sku
                               ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
@@ -298,7 +331,10 @@ export function AdminWarehouses() {
                                 <button onClick={cancelEdit} disabled={isSyncing} className="p-1 bg-red-900/30 text-red-500 rounded hover:bg-red-900/50"><X className="w-3 h-3" /></button>
                               </div>
                             ) : (
-                              <button onClick={() => startEditWarehouse(row)} className="p-1 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3 h-3" /></button>
+                              <div className="flex items-center gap-0.5">
+                                <button onClick={() => openCheck(row.name, row.sku, 'operative', row.operative)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                <button onClick={() => startEditWarehouse(row)} className="p-1 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3 h-3" /></button>
+                              </div>
                             )}
                           </div>
                         )
@@ -327,9 +363,17 @@ export function AdminWarehouses() {
                   <div className="divide-y divide-white/5">
                     {componentsList.map(row => (
                       <div key={row.sku} className={`p-4 flex items-center justify-between hover:bg-white/5 transition-colors ${row.qty < row.min_threshold ? 'bg-red-900/10' : ''}`}>
-                        <span className="text-sm font-mono text-white/80 pr-4">{row.name}</span>
+                        <div className="flex flex-col gap-0.5 pr-4">
+                          <span className="text-sm font-mono text-white/80">{row.name}</span>
+                          {(() => {
+                            const chk = checksMap[`components:${row.sku}`]
+                            if (!chk) return null
+                            const d = chk.delta
+                            return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                          })()}
+                        </div>
 
-                        <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <span className="text-[#c9963a] font-mono text-sm">
                             {row.unit_type === 'roll'
                               ? `${(row.qty / row.conversion_factor).toFixed(1)} м`
@@ -338,6 +382,7 @@ export function AdminWarehouses() {
                               : `${row.qty} шт`
                             }
                           </span>
+                          <button onClick={() => openCheck(row.name, row.sku, 'components', row.qty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-4 h-4" /></button>
                           <button onClick={() => setReplenishModal(row)} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-4 h-4" /></button>
                         </div>
                       </div>
@@ -354,6 +399,11 @@ export function AdminWarehouses() {
       <ReplenishModal
         item={replenishModal}
         onClose={() => setReplenishModal(null)}
+        onSuccess={loadData}
+      />
+      <InventoryCheckModal
+        item={checkModal}
+        onClose={() => setCheckModal(null)}
         onSuccess={loadData}
       />
     </div>

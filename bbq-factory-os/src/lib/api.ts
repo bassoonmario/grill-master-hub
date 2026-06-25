@@ -209,6 +209,23 @@ export interface PackagingRules {
   pcs_per_box: number
 }
 
+export interface InventoryCheckResult {
+  id: number
+  item_id: string
+  table_key: string
+  system_qty: number
+  actual_qty: number
+  delta: number
+  checked_at: string
+}
+
+export interface LatestCheck {
+  item_id: string
+  table_key: string
+  delta: number
+  checked_at: string
+}
+
 export interface ComponentItem {
   id: number
   name: string
@@ -431,4 +448,10 @@ export const api = {
       `/api/admin/components/${component_id}/replenish`,
       { input_value, warehouse }
     ),
+
+  inventoryCheck: (item_id: string, table_key: string, actual_qty: number, note?: string): Promise<InventoryCheckResult> =>
+    post<InventoryCheckResult>('/api/admin/inventory/check', { item_id, table_key, actual_qty, note }),
+
+  getLatestChecks: (): Promise<LatestCheck[]> =>
+    get<LatestCheck[]>('/api/admin/inventory/checks/latest'),
 }

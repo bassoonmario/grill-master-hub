@@ -151,6 +151,12 @@ class WriteOffResult(BaseModel):
     errors: list
     details: list
 
+class InventoryCheckBody(BaseModel):
+    item_id: str
+    table_key: str
+    actual_qty: float
+    note: Optional[str] = None
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -1078,6 +1084,59 @@ async def get_driver_tasks_done():
         """)
         return [dict(r) for r in rows]
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/admin/inventory/check")
+async def inventory_check(body: InventoryCheckBody):
+    valid_tables = ('finished', 'operative', 'main', 'cases_empty', 'finished_main', 'components')
+    if body.table_key not in valid_tables:
+        raise HTTPException(status_code=400, detail="Invalid table_key")
+    p = await get_pool()
+    try:
+        if body.table_key == 'finished':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", body.item_id)
+        elif body.table_key == 'operative':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_operative WHERE item_id = $1", body.item_id)
+        elif body.table_key == 'main':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_main WHERE item_id = $1", body.item_id)
+        elif body.table_key == 'cases_empty':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_cases WHERE item_id = $1", body.item_id)
+        elif body.table_key == 'finished_main':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.item_id)
+        else:  # components
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1::int", body.item_id)
+
+        system_qty = float(row['quantity']) if row else 0.0
+        delta = body.actual_qty - system_qty
+
+        new_row = await p.fetchrow("""
+            INSERT INTO bot_workshop.inventory_checks
+                (item_id, table_key, system_qty, actual_qty, delta, note, checked_at)
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+            RETURNING id, item_id, table_key, system_qty, actual_qty, delta,
+                      to_char(checked_at, 'DD.MM.YY HH24:MI') AS checked_at
+        """, body.item_id, body.table_key, system_qty, body.actual_qty, delta, body.note)
+        return dict(new_row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/admin/inventory/check: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/inventory/checks/latest")
+async def get_latest_checks():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT DISTINCT ON (item_id, table_key)
+                item_id, table_key, delta,
+                to_char(checked_at, 'DD.MM.YY HH24:MI') AS checked_at
+            FROM bot_workshop.inventory_checks
+            ORDER BY item_id, table_key, checked_at DESC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/admin/inventory/checks/latest: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/admin/write-off")
