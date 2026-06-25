@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Spinner, StatusTag, Tabs } from '@/components/UI'
-import { api, IncomingTask } from '@/lib/api'
+import { api, IncomingTask, ComponentItem } from '@/lib/api'
 import { Plus, ClipboardList, Archive, Send, Package, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 
 type TabKey = 'create' | 'active' | 'archive'
@@ -23,6 +23,11 @@ export function AdminTasker() {
   const [itemsList, setItemsList] = useState<string[]>([])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [packagingLoading, setPackagingLoading] = useState(false)
+
+  const [componentsList, setComponentsList] = useState<ComponentItem[]>([])
+  const [selectedComponent, setSelectedComponent] = useState<ComponentItem | null>(null)
+  const [componentInputQty, setComponentInputQty] = useState('')
+  const [componentWarehouse, setComponentWarehouse] = useState<'main' | 'operative'>('main')
 
   // Редагування карток у вкладці 'Активні'
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
@@ -60,12 +65,22 @@ export function AdminTasker() {
     }
   }, [taskType])
 
+  const loadComponents = useCallback(async () => {
+    try {
+      const data = await api.getItemsComponents()
+      setComponentsList(data || [])
+    } catch (e) {
+      console.error(e)
+    }
+  }, [])
+
  useEffect(() => {
   loadItems()
+  loadComponents()
   if (tab === 'active') {
     loadTasks()
   }
-}, [tab, loadTasks, loadItems])
+}, [tab, loadTasks, loadItems, loadComponents])
 
   const loadPackaging = useCallback(async (itemId: string) => {
     if (!itemId) {
@@ -101,11 +116,34 @@ export function AdminTasker() {
     setPcsPerPack('')
     setPacksPerBox('')
     setPcsPerBox('')
+    setSelectedComponent(null)
+    setComponentInputQty('')
+    setComponentWarehouse('main')
   }
 
   const handleSubmit = async () => {
     setError(null)
     setSuccess(null)
+
+    if (selectedComponent) {
+      if (!componentInputQty || parseFloat(componentInputQty) <= 0) {
+        setError('Вкажіть коректну кількість')
+        return
+      }
+      setIsSubmitting(true)
+      try {
+        await api.replenishComponent(selectedComponent.id, parseFloat(componentInputQty), componentWarehouse)
+        setSuccess('Завдання для водія створено')
+        resetForm()
+        setTimeout(() => setSuccess(null), 3000)
+      } catch (e) {
+        console.error(e)
+        setError('Помилка створення завдання')
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
+    }
 
     if (taskType === 'simple') {
       if (!comment.trim()) {
@@ -258,7 +296,7 @@ export function AdminTasker() {
                 <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Артикул</label>
                 <select
                   value={selectedItem}
-                  onChange={e => setSelectedItem(e.target.value)}
+                  onChange={e => { setSelectedItem(e.target.value); if (e.target.value) setSelectedComponent(null) }}
                   className="w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors appearance-none"
                 >
                   <option value="">Оберіть артикул...</option>
@@ -269,55 +307,117 @@ export function AdminTasker() {
               </div>
 
               <div>
-                <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Кількість</label>
-                <input
-                  type="number"
-                  value={targetQty}
-                  onChange={e => setTargetQty(e.target.value)}
-                  placeholder="0"
-                  className="w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
-                />
+                <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Фурнітура</label>
+                <select
+                  value={selectedComponent ? String(selectedComponent.id) : ''}
+                  onChange={e => {
+                    const comp = componentsList.find(c => String(c.id) === e.target.value) || null
+                    setSelectedComponent(comp)
+                    if (comp) setSelectedItem('')
+                  }}
+                  className="w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors appearance-none"
+                >
+                  <option value="">Оберіть фурнітуру...</option>
+                  {componentsList.map(c => (
+                    <option key={c.id} value={String(c.id)}>{c.name}</option>
+                  ))}
+                </select>
               </div>
 
-              <div className="bg-[#0e0e0e] border border-white/5 rounded-xl p-4">
-                <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3 flex items-center gap-2">
-                  <Package className="w-3 h-3" />
-                  Правила фасовки
-                  {packagingLoading && <span className="text-[#c9963a] animate-pulse">завантаження...</span>}
-                </div>
-                <div className="grid grid-cols-3 gap-3">
+              {!selectedComponent && (
+                <>
                   <div>
-                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/пачка</label>
+                    <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Кількість</label>
                     <input
                       type="number"
-                      value={pcsPerPack}
-                      onChange={e => setPcsPerPack(e.target.value)}
+                      value={targetQty}
+                      onChange={e => setTargetQty(e.target.value)}
                       placeholder="0"
-                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                      className="w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
                     />
                   </div>
+
+                  <div className="bg-[#0e0e0e] border border-white/5 rounded-xl p-4">
+                    <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-3 flex items-center gap-2">
+                      <Package className="w-3 h-3" />
+                      Правила фасовки
+                      {packagingLoading && <span className="text-[#c9963a] animate-pulse">завантаження...</span>}
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/пачка</label>
+                        <input
+                          type="number"
+                          value={pcsPerPack}
+                          onChange={e => setPcsPerPack(e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">пачок/ящик</label>
+                        <input
+                          type="number"
+                          value={packsPerBox}
+                          onChange={e => setPacksPerBox(e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/ящик</label>
+                        <input
+                          type="number"
+                          value={pcsPerBox}
+                          onChange={e => setPcsPerBox(e.target.value)}
+                          placeholder="0"
+                          className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {selectedComponent && (
+                <>
                   <div>
-                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">пачок/ящик</label>
+                    <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest mb-2">Склад доставки</div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setComponentWarehouse('main')}
+                        className={`flex-1 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider border transition-all ${componentWarehouse === 'main' ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40' : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'}`}
+                      >
+                        Основний
+                      </button>
+                      <button
+                        onClick={() => setComponentWarehouse('operative')}
+                        className={`flex-1 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider border transition-all ${componentWarehouse === 'operative' ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40' : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'}`}
+                      >
+                        Майстерня
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">
+                      Кількість ({({ pcs: 'шт', kg: 'кг', roll: 'мотки', strip: 'полоски' } as Record<string,string>)[selectedComponent.unit_type] || 'шт'})
+                    </label>
                     <input
                       type="number"
-                      value={packsPerBox}
-                      onChange={e => setPacksPerBox(e.target.value)}
+                      value={componentInputQty}
+                      onChange={e => setComponentInputQty(e.target.value)}
                       placeholder="0"
-                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+                      className="w-full bg-[#0a0a0a] border border-white/10 rounded-xl p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
                     />
+                    {componentInputQty && parseFloat(componentInputQty) > 0 && (
+                      <p className="text-white/30 font-mono text-xs mt-1.5">
+                        = {Math.round(parseFloat(componentInputQty) * selectedComponent.conversion_factor)} шт
+                      </p>
+                    )}
                   </div>
-                  <div>
-                    <label className="text-[9px] font-mono text-white/20 uppercase block mb-1.5">шт/ящик</label>
-                    <input
-                      type="number"
-                      value={pcsPerBox}
-                      onChange={e => setPcsPerBox(e.target.value)}
-                      placeholder="0"
-                      className="w-full bg-black border border-white/10 rounded-lg p-2.5 text-center text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
-                    />
-                  </div>
-                </div>
-              </div>
+                </>
+              )}
             </>
           )}
 

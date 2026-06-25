@@ -209,6 +209,13 @@ export interface PackagingRules {
   pcs_per_box: number
 }
 
+export interface ComponentItem {
+  id: number
+  name: string
+  unit_type: string
+  conversion_factor: number
+}
+
 // ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
@@ -292,7 +299,7 @@ export const api = {
   },
 
   confirmTasker: (id: number) =>
-    post('/api/tasker/confirm', { id }).catch(() => console.log('demo mode')),
+    post('/api/tasker/confirm', { id }),
 
   // ─── MASTER CABINET API ─────────────────────────────────────────────────────
 
@@ -322,6 +329,9 @@ export const api = {
 
   getItemsOperative: (): Promise<string[]> =>
     get<string[]>('/api/items/operative'),
+
+  getItemsComponents: (): Promise<ComponentItem[]> =>
+    get<ComponentItem[]>('/api/items/components'),
 
   getMasterLogs: (masterName: string): Promise<MasterLog[]> =>
     get<MasterLog[]>(`/api/master/logs?master_name=${encodeURIComponent(masterName)}`),

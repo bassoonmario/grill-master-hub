@@ -17,6 +17,8 @@ interface WarehouseRow {
   name: string
   operative: number
   main: number
+  min_limit?: number
+  max_limit?: number
 }
 
 interface ComponentRow {
@@ -39,6 +41,7 @@ export function AdminWarehouses() {
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [isSyncing, setIsSyncing] = useState(false)
   const [replenishModal, setReplenishModal] = useState<ReplenishItem | null>(null)
+
 
   const loadData = useCallback(async () => {
     try {
@@ -77,14 +80,6 @@ export function AdminWarehouses() {
     setEditValues({
       operative: String(row.operative),
       main: String(row.main)
-    })
-    setError(null)
-  }
-
-  const startEditComponent = (row: ComponentRow) => {
-    setEditingSku(row.sku)
-    setEditValues({
-      components: String(row.qty)
     })
     setError(null)
   }
@@ -142,26 +137,6 @@ export function AdminWarehouses() {
     }
   }
 
-  const saveEditComponent = async (row: ComponentRow) => {
-    setIsSyncing(true)
-    setError(null)
-    let hasError = false
-    try {
-      const vComp = parseInt(editValues.components)
-      if (!isNaN(vComp) && vComp >= 0 && vComp !== row.qty) await api.updateInventory('components', row.sku, vComp)
-    } catch (e) {
-      console.error(e)
-      hasError = true
-      setError("Помилка збереження. Спробуйте ще раз.")
-    } finally {
-      if (!hasError) {
-        await loadData()
-        setEditingSku(null)
-      }
-      setIsSyncing(false)
-    }
-  }
-
   // Grouping logic
   const grillsMap = new Map<string, GrillRow>()
   const warehousesMap = new Map<string, WarehouseRow>()
@@ -179,7 +154,10 @@ export function AdminWarehouses() {
     } else if (['operative', 'main'].includes(i.category)) {
       if (!warehousesMap.has(i.sku)) warehousesMap.set(i.sku, { sku: i.sku, name: i.name || i.sku, operative: 0, main: 0 })
       const entry = warehousesMap.get(i.sku)!
-      if (i.category === 'operative') entry.operative = i.qty
+      if (i.category === 'operative') {
+        entry.operative = i.qty
+        if (i.min_limit !== undefined) entry.min_limit = i.min_limit
+      }
       if (i.category === 'main') entry.main = i.qty
     } else if (i.category === 'cases') {
       componentsMap.set(i.sku, {
@@ -226,12 +204,12 @@ export function AdminWarehouses() {
               {openAccordion === 'grills' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
             </button>
             {openAccordion === 'grills' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden shadow-inner">
+              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {grills.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_auto] gap-2 p-3 bg-white/5 border-b border-white/5 text-[10px] font-mono text-white/40 uppercase items-center">
+                    <div className="sticky top-0 z-10 bg-[#0a0a0a] grid grid-cols-[1.5fr_1fr_1fr_1fr_auto] gap-2 p-3 border-b border-white/5 text-[10px] font-mono text-white/40 uppercase items-center">
                       <span>Модель</span>
                       <span className="text-center">Пусті</span>
                       <span className="text-center">Спаковані</span>
@@ -280,40 +258,51 @@ export function AdminWarehouses() {
               {openAccordion === 'warehouses' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
             </button>
             {openAccordion === 'warehouses' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden shadow-inner">
+              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {warehouses.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[2fr_1fr_1fr_auto] gap-2 p-3 bg-white/5 border-b border-white/5 text-[10px] font-mono text-white/40 uppercase items-center">
+                    <div className="sticky top-0 z-10 bg-[#0a0a0a] grid grid-cols-[2fr_0.8fr_0.8fr_auto] gap-1.5 px-2.5 py-2 border-b border-white/5 text-[9px] font-mono text-white/40 uppercase items-center">
                       <span>Назва</span>
-                      <span className="text-center">Оперативний</span>
+                      <span className="text-center">Операт.</span>
                       <span className="text-center">Основний</span>
-                      <span className="w-8"></span>
+                      <span className="w-7"></span>
                     </div>
                     <div className="divide-y divide-white/5">
-                      {warehouses.map(row => (
-                        <div key={row.sku} className="grid grid-cols-[2fr_1fr_1fr_auto] gap-2 p-3 items-center hover:bg-white/5 transition-colors">
-                          <span className="text-sm font-mono text-white/80 break-words pr-2">{row.name}</span>
-                          
-                          {editingSku === row.sku ? (
-                            <>
-                              <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1.5 text-center text-white font-mono text-xs outline-none" />
-                              <input type="number" value={editValues.main || ''} onChange={e => setEditValues(p => ({...p, main: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1.5 text-center text-white font-mono text-xs outline-none" />
-                              <div className="flex items-center gap-1">
-                                <button onClick={() => saveEditWarehouse(row)} disabled={isSyncing} className="p-1.5 bg-green-900/30 text-green-500 rounded hover:bg-green-900/50">{isSyncing ? <Spinner /> : <Check className="w-3.5 h-3.5" />}</button>
-                                <button onClick={cancelEdit} disabled={isSyncing} className="p-1.5 bg-red-900/30 text-red-500 rounded hover:bg-red-900/50"><X className="w-3.5 h-3.5" /></button>
+                      {warehouses.map(row => {
+                        const mid = row.min_limit !== undefined && row.max_limit !== undefined
+                          ? (row.min_limit + row.max_limit) / 2
+                          : undefined
+                        const isCritical = row.min_limit !== undefined && row.operative < row.min_limit
+                        const isLow = !isCritical && mid !== undefined && row.operative < mid
+                        const rowBg = isCritical ? 'bg-red-900/20' : isLow ? 'bg-yellow-900/20' : ''
+                        const opColor = isCritical ? 'text-red-400' : isLow ? 'text-yellow-400' : 'text-[#c9963a]'
+                        return (
+                          <div key={row.sku} className={`grid grid-cols-[2fr_0.8fr_0.8fr_auto] gap-1.5 px-2.5 py-2 items-center hover:bg-white/5 transition-colors ${rowBg}`}>
+                            <span className="text-xs font-mono text-white/80 break-words pr-1">{row.name}</span>
+
+                            {editingSku === row.sku
+                              ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
+                              : <span className={`text-center font-mono text-xs ${opColor}`}>{row.operative}</span>
+                            }
+
+                            {editingSku === row.sku
+                              ? <input type="number" value={editValues.main || ''} onChange={e => setEditValues(p => ({...p, main: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
+                              : <span className="text-center text-[#c9963a] font-mono text-xs">{row.main}</span>
+                            }
+
+                            {editingSku === row.sku ? (
+                              <div className="flex items-center gap-0.5">
+                                <button onClick={() => saveEditWarehouse(row)} disabled={isSyncing} className="p-1 bg-green-900/30 text-green-500 rounded hover:bg-green-900/50">{isSyncing ? <Spinner /> : <Check className="w-3 h-3" />}</button>
+                                <button onClick={cancelEdit} disabled={isSyncing} className="p-1 bg-red-900/30 text-red-500 rounded hover:bg-red-900/50"><X className="w-3 h-3" /></button>
                               </div>
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-center text-[#c9963a] font-mono text-sm">{row.operative}</span>
-                              <span className="text-center text-[#c9963a] font-mono text-sm">{row.main}</span>
-                              <button onClick={() => startEditWarehouse(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
-                            </>
-                          )}
-                        </div>
-                      ))}
+                            ) : (
+                              <button onClick={() => startEditWarehouse(row)} className="p-1 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3 h-3" /></button>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -331,7 +320,7 @@ export function AdminWarehouses() {
               {openAccordion === 'components' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
             </button>
             {openAccordion === 'components' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl overflow-hidden shadow-inner">
+              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {componentsList.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
@@ -340,29 +329,16 @@ export function AdminWarehouses() {
                       <div key={row.sku} className={`p-4 flex items-center justify-between hover:bg-white/5 transition-colors ${row.qty < row.min_threshold ? 'bg-red-900/10' : ''}`}>
                         <span className="text-sm font-mono text-white/80 pr-4">{row.name}</span>
 
-                        <div className="flex flex-shrink-0">
-                          {editingSku === row.sku ? (
-                            <div className="flex items-center gap-2">
-                              <input type="number" value={editValues.components || ''} onChange={e => setEditValues(p => ({...p, components: e.target.value}))} disabled={isSyncing} className="w-16 bg-black border border-[#c9963a] rounded p-1.5 text-center text-white font-mono text-xs outline-none" />
-                              <div className="flex items-center gap-1">
-                                <button onClick={() => saveEditComponent(row)} disabled={isSyncing} className="p-1.5 bg-green-900/30 text-green-500 rounded hover:bg-green-900/50">{isSyncing ? <Spinner /> : <Check className="w-3.5 h-3.5" />}</button>
-                                <button onClick={cancelEdit} disabled={isSyncing} className="p-1.5 bg-red-900/30 text-red-500 rounded hover:bg-red-900/50"><X className="w-3.5 h-3.5" /></button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-3">
-                              <span className="text-[#c9963a] font-mono text-sm">
-                                {row.unit_type === 'roll'
-                                  ? `${(row.qty / row.conversion_factor).toFixed(1)} м`
-                                  : row.unit_type === 'kg'
-                                  ? `${(row.qty / row.conversion_factor).toFixed(2)} кг`
-                                  : `${row.qty} шт`
-                                }
-                              </span>
-                              <button onClick={() => setReplenishModal(row)} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-4 h-4" /></button>
-                              <button onClick={() => startEditComponent(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-4 h-4" /></button>
-                            </div>
-                          )}
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <span className="text-[#c9963a] font-mono text-sm">
+                            {row.unit_type === 'roll'
+                              ? `${(row.qty / row.conversion_factor).toFixed(1)} м`
+                              : row.unit_type === 'kg'
+                              ? `${(row.qty / row.conversion_factor).toFixed(2)} кг`
+                              : `${row.qty} шт`
+                            }
+                          </span>
+                          <button onClick={() => setReplenishModal(row)} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-4 h-4" /></button>
                         </div>
                       </div>
                     ))}

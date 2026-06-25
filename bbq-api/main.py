@@ -989,6 +989,21 @@ async def get_items_operative():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/items/components")
+async def get_items_components():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, component_name AS name, COALESCE(unit_type, 'pcs') AS unit_type,
+                   COALESCE(conversion_factor, 1)::float AS conversion_factor
+            FROM bot_workshop.cases_components
+            WHERE is_internal = false OR is_internal IS NULL
+            ORDER BY component_name
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/tasks/incoming/{task_id}/complete")
 async def complete_simple_task(task_id: int):
     p = await get_pool()
