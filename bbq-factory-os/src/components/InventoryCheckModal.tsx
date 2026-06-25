@@ -29,7 +29,7 @@ export function InventoryCheckModal({ item, onClose, onSuccess }: Props) {
 
   const handleSubmit = async () => {
     const qty = parseFloat(actualQty)
-    if (isNaN(qty) || qty < 0) {
+    if (isNaN(qty)) {
       setError('Введіть коректну кількість')
       return
     }

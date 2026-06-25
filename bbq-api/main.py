@@ -11,6 +11,7 @@ from datetime import date
 from dotenv import load_dotenv
 import random
 import calendar
+import uuid
 
 load_dotenv()
 
@@ -1139,6 +1140,45 @@ async def get_latest_checks():
         print(f"Error in GET /api/admin/inventory/checks/latest: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/admin/writeoff-logs")
+async def get_writeoff_logs(
+    date_from: str = None,
+    date_to: str = None,
+    operation: str = None,
+    search: str = None
+):
+    p = await get_pool()
+    date_from_parsed = date.fromisoformat(date_from) if date_from else None
+    date_to_parsed = date.fromisoformat(date_to) if date_to else None
+    try:
+        conditions = []
+        params = []
+        if date_from_parsed:
+            params.append(date_from_parsed)
+            conditions.append(f"dt_create::date >= ${len(params)}")
+        if date_to_parsed:
+            params.append(date_to_parsed)
+            conditions.append(f"dt_create::date <= ${len(params)}")
+        if operation:
+            params.append(operation)
+            conditions.append(f"operation = ${len(params)}")
+        if search:
+            params.append(f"%{search}%")
+            conditions.append(f"(article ILIKE ${len(params)} OR component ILIKE ${len(params)})")
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = await p.fetch(f"""
+            SELECT id,
+                   to_char(dt_create AT TIME ZONE 'Europe/Kyiv', 'DD.MM.YY HH24:MI') AS dt_create,
+                   session_id, article, component, qty, source, operation
+            FROM bot_workshop.history_logs
+            {where}
+            ORDER BY dt_create DESC, session_id
+        """, *params)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/admin/writeoff-logs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/admin/write-off")
 async def run_write_off(dry_run: bool = False):
     p = await get_pool()
@@ -1167,7 +1207,9 @@ async def run_write_off(dry_run: bool = False):
                 
                 if not shipments:
                     return {"success": True, "written_off_count": 0, "errors": [], "details": ["Немає записів для списання"]}
-                
+
+                session_id = str(uuid.uuid4())
+
                 for row in shipments:
                     s_id = row['id']
                     raw_article = row['article'].strip().upper()
@@ -1193,9 +1235,9 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, qty, item_id)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_direct')
-                        """, item_id, -qty)
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                            VALUES ($1, $2, $2, $3, 'inventory_operative', 'write_off_direct')
+                        """, session_id, article, -qty)
                         details.append(f"Списано {qty} з operative: {item_id}")
                         continue
                     
@@ -1219,9 +1261,9 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, from_finished, base_article)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                            VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_finished')
-                        """, base_article, -from_finished)
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                            VALUES ($1, $2, $2, $3, 'inventory_finished', 'write_off_finished')
+                        """, session_id, base_article, -from_finished)
                         details.append(f"Списано {from_finished} з finished: {base_article}")
 
                     remaining = qty - from_finished
@@ -1245,10 +1287,14 @@ async def run_write_off(dry_run: bool = False):
                                     SET quantity = quantity - $1
                                     WHERE item_id = $2
                                 """, ing['quantity'] * remaining, ing['item_id'])
+                                await conn.execute("""
+                                    INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                                    VALUES ($1, $2, $3, $4, 'inventory_operative', 'write_off_component')
+                                """, session_id, base_article, ing['item_id'], -(ing['quantity'] * remaining))
                             await conn.execute("""
-                                INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                                VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_case')
-                            """, base_article, -remaining)
+                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                                VALUES ($1, $2, $2, $3, 'inventory_cases', 'write_off_case')
+                            """, session_id, base_article, -remaining)
                             details.append(f"Списано {remaining} кейсів {base_article} (cases+operative)")
                         else:
                             # C. Не кейс: recipes → inventory_operative
@@ -1264,10 +1310,10 @@ async def run_write_off(dry_run: bool = False):
                                         SET quantity = quantity - $1
                                         WHERE item_id = $2
                                     """, ing['quantity'] * remaining, ing['item_id'])
-                                await conn.execute("""
-                                    INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                                    VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'write_off_box')
-                                """, base_article, -remaining)
+                                    await conn.execute("""
+                                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                                        VALUES ($1, $2, $3, $4, 'inventory_operative', 'write_off_box')
+                                    """, session_id, base_article, ing['item_id'], -(ing['quantity'] * remaining))
                                 details.append(f"Списано {remaining} ящиків {base_article}")
                             else:
                                 errors.append(f"Рецепт не знайдено: {base_article} (id={s_id})")

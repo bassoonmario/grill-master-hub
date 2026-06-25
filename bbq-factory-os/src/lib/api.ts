@@ -233,6 +233,17 @@ export interface ComponentItem {
   conversion_factor: number
 }
 
+export interface WriteoffLog {
+  id: number
+  dt_create: string
+  session_id: string
+  article: string
+  component: string
+  qty: number
+  source: string
+  operation: string
+}
+
 // ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
@@ -454,4 +465,14 @@ export const api = {
 
   getLatestChecks: (): Promise<LatestCheck[]> =>
     get<LatestCheck[]>('/api/admin/inventory/checks/latest'),
+
+  getWriteoffLogs: (params?: { dateFrom?: string; dateTo?: string; operation?: string; search?: string }): Promise<WriteoffLog[]> => {
+    const qs = new URLSearchParams()
+    if (params?.dateFrom) qs.set('date_from', params.dateFrom)
+    if (params?.dateTo) qs.set('date_to', params.dateTo)
+    if (params?.operation) qs.set('operation', params.operation)
+    if (params?.search) qs.set('search', params.search)
+    const q = qs.toString()
+    return get<WriteoffLog[]>(`/api/admin/writeoff-logs${q ? '?' + q : ''}`)
+  },
 }
