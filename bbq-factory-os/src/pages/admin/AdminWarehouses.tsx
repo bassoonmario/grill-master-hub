@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
-import { SectionTitle, Spinner } from '@/components/UI'
+import { SectionTitle, Spinner, Tabs } from '@/components/UI'
 import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
 import { InventoryCheckModal, CheckModalItem } from '@/components/InventoryCheckModal'
 import { api, StockItem, LatestCheck } from '@/lib/api'
-import { ChevronDown, ChevronUp, Pencil, Check, X, AlertCircle, PlusCircle, ClipboardCheck } from 'lucide-react'
+import { Pencil, Check, X, AlertCircle, PlusCircle, ClipboardCheck } from 'lucide-react'
 
 interface GrillRow {
   sku: string
@@ -36,7 +36,7 @@ export function AdminWarehouses() {
   const [items, setItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [openAccordion, setOpenAccordion] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<'warehouses' | 'grills' | 'components'>('warehouses')
   
   const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Record<string, string>>({})
@@ -74,10 +74,6 @@ export function AdminWarehouses() {
   useEffect(() => {
     loadData()
   }, [loadData])
-
-  const toggleAccordion = (key: string) => {
-    setOpenAccordion(openAccordion === key ? null : key)
-  }
 
   const startEditGrill = (row: GrillRow) => {
     setEditingSku(row.sku)
@@ -207,18 +203,20 @@ export function AdminWarehouses() {
         </div>
       ) : (
         <div className="space-y-4">
-          
-          {/* Грилі */}
-          <div>
-            <button 
-              onClick={() => toggleAccordion('grills')}
-              className="w-full flex justify-between items-center bg-[#121212] border border-white/10 p-4 rounded-xl text-left hover:bg-[#1a1a1a] transition-colors"
-            >
-              <span className="text-white font-display text-lg uppercase tracking-wider">Грилі</span>
-              {openAccordion === 'grills' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
-            </button>
-            {openAccordion === 'grills' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
+
+          <Tabs
+            tabs={[
+              { key: 'warehouses', label: 'Склади' },
+              { key: 'grills', label: 'Грилі' },
+              { key: 'components', label: 'Кейс-компоненти' },
+            ]}
+            active={activeTab}
+            onChange={key => setActiveTab(key as typeof activeTab)}
+            variant="underline"
+          />
+
+          {activeTab === 'grills' && (
+            <div className="bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {grills.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
@@ -271,19 +269,9 @@ export function AdminWarehouses() {
                 )}
               </div>
             )}
-          </div>
 
-          {/* Склади */}
-          <div>
-            <button 
-              onClick={() => toggleAccordion('warehouses')}
-              className="w-full flex justify-between items-center bg-[#121212] border border-white/10 p-4 rounded-xl text-left hover:bg-[#1a1a1a] transition-colors"
-            >
-              <span className="text-white font-display text-lg uppercase tracking-wider">Склади</span>
-              {openAccordion === 'warehouses' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
-            </button>
-            {openAccordion === 'warehouses' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
+          {activeTab === 'warehouses' && (
+            <div className="bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {warehouses.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
@@ -344,19 +332,9 @@ export function AdminWarehouses() {
                 )}
               </div>
             )}
-          </div>
 
-          {/* Кейс-компоненти */}
-          <div>
-            <button 
-              onClick={() => toggleAccordion('components')}
-              className="w-full flex justify-between items-center bg-[#121212] border border-white/10 p-4 rounded-xl text-left hover:bg-[#1a1a1a] transition-colors"
-            >
-              <span className="text-white font-display text-lg uppercase tracking-wider">Кейс-компоненти</span>
-              {openAccordion === 'components' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />}
-            </button>
-            {openAccordion === 'components' && (
-              <div className="mt-2 bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
+          {activeTab === 'components' && (
+            <div className="bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
                 {componentsList.length === 0 ? (
                   <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
                 ) : (
@@ -391,7 +369,6 @@ export function AdminWarehouses() {
                 )}
               </div>
             )}
-          </div>
 
         </div>
       )}

@@ -838,9 +838,10 @@ async def update_admin_inventory(body: InventoryUpdate):
                 delta = body.new_quantity - old_qty
                 if delta != 0:
                     await conn.execute("""
-                        INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                        VALUES (CURRENT_TIMESTAMP, $1, $2, 'Ручне коригування адміна')
-                    """, str(body.item_id), delta)
+                        INSERT INTO bot_workshop.system_logs
+                            (actor, action, table_key, item_id, old_qty, new_qty, delta, note)
+                        VALUES ('admin', 'inline_edit', $1, $2, $3, $4, $5, 'Ручне коригування адміна')
+                    """, body.table_key, str(body.item_id), old_qty, body.new_quantity, delta)
                     
         return {"status": "updated", "delta": delta}
     except HTTPException:
@@ -884,8 +885,9 @@ async def replenish_component(component_id: int, body: dict = Body(...)):
                         WHERE id = $2
                     """, qty_to_add, component_id)
                     await conn.execute("""
-                        INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                        VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'replenish_component')
+                        INSERT INTO bot_workshop.system_logs
+                            (actor, action, table_key, item_id, old_qty, new_qty, delta, note)
+                        VALUES ('admin', 'replenish_component', 'components', $1, NULL, NULL, $2, 'Поповнення внутрішньої фурнітури')
                     """, comp["component_name"], qty_to_add)
                     return {"success": True, "mode": "direct", "added_qty": qty_to_add}
     except HTTPException:
@@ -939,8 +941,9 @@ async def deliver_task(task_id: int, body: TaskDelivery):
                         WHERE id = $2
                     """, body.qty, task_info['component_id'])
                     await conn.execute("""
-                        INSERT INTO bot_workshop.history_logs (dt_create, item_id, change_qty, operation_type)
-                        VALUES (NOW() AT TIME ZONE 'Europe/Kyiv', $1, $2, 'replenish_component')
+                        INSERT INTO bot_workshop.system_logs
+                            (actor, action, table_key, item_id, old_qty, new_qty, delta, note)
+                        VALUES ('driver', 'replenish_component', 'components', $1, NULL, NULL, $2, 'Доставка водієм')
                     """, task_info['item_id'], body.qty)
                 elif body.destination == 'main':
                     await conn.execute("""
@@ -1105,7 +1108,7 @@ async def inventory_check(body: InventoryCheckBody):
         elif body.table_key == 'finished_main':
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.item_id)
         else:  # components
-            row = await p.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1::int", body.item_id)
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1", int(body.item_id))
 
         system_qty = float(row['quantity']) if row else 0.0
         delta = body.actual_qty - system_qty
@@ -1117,6 +1120,21 @@ async def inventory_check(body: InventoryCheckBody):
             RETURNING id, item_id, table_key, system_qty, actual_qty, delta,
                       to_char(checked_at, 'DD.MM.YY HH24:MI') AS checked_at
         """, body.item_id, body.table_key, system_qty, body.actual_qty, delta, body.note)
+
+        # Оновлюємо системне qty до фактичного значення
+        if body.table_key == 'finished':
+            await p.execute("UPDATE bot_workshop.inventory_finished SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        elif body.table_key == 'operative':
+            await p.execute("UPDATE bot_workshop.inventory_operative SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        elif body.table_key == 'main':
+            await p.execute("UPDATE bot_workshop.inventory_main SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        elif body.table_key == 'cases_empty':
+            await p.execute("UPDATE bot_workshop.inventory_cases SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        elif body.table_key == 'finished_main':
+            await p.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        else:  # components — PK це int id, не item_id
+            await p.execute("UPDATE bot_workshop.cases_components SET quantity = $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2", body.actual_qty, int(body.item_id))
+
         return dict(new_row)
     except HTTPException:
         raise
@@ -1198,20 +1216,30 @@ async def run_write_off(dry_run: bool = False):
         async with p.acquire() as conn:
             async with conn.transaction():
                 # Отримуємо всі незаписані відправки
-                shipments = await conn.fetch("""
+                shipments_raw = await conn.fetch("""
                     SELECT id, article, quantity, is_case
                     FROM bot_workshop.daily_shipments
                     WHERE is_written_off = false
                     ORDER BY report_date, id
                 """)
-                
-                if not shipments:
+
+                if not shipments_raw:
                     return {"success": True, "written_off_count": 0, "errors": [], "details": ["Немає записів для списання"]}
+
+                # Агрегуємо по article — складаємо qty для однакових артикулів
+                # is_case беремо від першого запису (однаковий для одного артикулу)
+                aggregated = {}
+                for r in shipments_raw:
+                    key = r['article'].strip().upper()
+                    if key not in aggregated:
+                        aggregated[key] = {'article': key, 'quantity': 0, 'is_case': r['is_case']}
+                    aggregated[key]['quantity'] += r['quantity']
+                shipments = list(aggregated.values())
 
                 session_id = str(uuid.uuid4())
 
                 for row in shipments:
-                    s_id = row['id']
+                    s_id = None
                     raw_article = row['article'].strip().upper()
                     qty = row['quantity']
                     is_case = row['is_case']
