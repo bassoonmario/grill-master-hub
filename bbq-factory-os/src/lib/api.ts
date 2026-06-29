@@ -61,7 +61,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished'
+  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished' | 'loot_box_operative' | 'loot_box_main'
   min_limit?: number
   unit_type?: string
   conversion_factor?: number

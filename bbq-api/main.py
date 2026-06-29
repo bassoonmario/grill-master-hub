@@ -234,6 +234,30 @@ async def get_stock():
             SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'finished_main' AS category
             FROM bot_workshop.inventory_finished_main
 
+            UNION ALL
+            SELECT item_id::text, item_name AS name, quantity::float,
+                min_limit::float, NULL::text AS unit_type, NULL::float AS conversion_factor,
+                CASE
+                    WHEN min_limit IS NULL         THEN 'ok'
+                    WHEN quantity <= 0             THEN 'critical'
+                    WHEN quantity <= min_limit     THEN 'critical'
+                    WHEN quantity <= min_limit*1.5 THEN 'low'
+                    ELSE 'ok'
+                END AS status, 'loot_box_main' AS category
+            FROM bot_workshop.loot_box_main
+
+            UNION ALL
+            SELECT item_id::text, item_name, quantity::float, min_limit::float,
+                NULL::text, NULL::float,
+                CASE
+                    WHEN min_limit IS NULL         THEN 'ok'
+                    WHEN quantity <= 0             THEN 'critical'
+                    WHEN quantity <= min_limit     THEN 'critical'
+                    WHEN quantity <= min_limit*1.5 THEN 'low'
+                    ELSE 'ok'
+                END AS status, 'loot_box_operative' AS category
+            FROM bot_workshop.loot_box_operative
+
             ORDER BY category, item_id
         """)
         return [dict(r) for r in rows]
@@ -620,12 +644,6 @@ async def get_notifications(role: Optional[str] = None):
 
             UNION ALL
 
-            SELECT 'inventory_operative' AS source, item_id, quantity::float, min_limit::float AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
-            FROM bot_workshop.inventory_operative
-            WHERE min_limit IS NOT NULL AND quantity <= min_limit
-
-            UNION ALL
-
             SELECT 'cases_components' AS source, component_name AS item_id, quantity::float, min_threshold::float AS limit_val, is_internal, id::text, unit_type, conversion_factor
             FROM bot_workshop.cases_components
             WHERE min_threshold IS NOT NULL AND quantity <= min_threshold
@@ -635,6 +653,18 @@ async def get_notifications(role: Optional[str] = None):
             SELECT 'defects' AS source, sku AS item_id, 0 AS quantity, 0 AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
             FROM bot_workshop.defects
             WHERE status != 'fixed'
+
+            UNION ALL
+
+            SELECT 'loot_box_operative' AS source, item_id, quantity::float, min_limit::float AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
+            FROM bot_workshop.loot_box_operative
+            WHERE min_limit IS NOT NULL AND quantity <= min_limit
+
+            UNION ALL
+
+            SELECT 'loot_box_main' AS source, item_id, quantity::float, min_limit::float AS limit_val, NULL::boolean AS is_internal, NULL::text AS id, NULL::text AS unit_type, NULL::float AS conversion_factor
+            FROM bot_workshop.loot_box_main
+            WHERE min_limit IS NOT NULL AND quantity <= min_limit
         """)
         return [dict(r) for r in rows]
     except Exception as e:
@@ -778,7 +808,7 @@ async def update_incoming_task(task_id: int, body: IncomingTaskUpdate):
 @app.patch("/api/admin/inventory")
 async def update_admin_inventory(body: InventoryUpdate):
     p = await get_pool()
-    valid_tables = ('finished', 'operative', 'components', 'main', 'cases_empty', 'finished_main')
+    valid_tables = ('finished', 'operative', 'components', 'main', 'cases_empty', 'finished_main', 'loot_box_operative', 'loot_box_main')
     if body.table_key not in valid_tables:
         raise HTTPException(status_code=400, detail="Invalid table_key")
         
@@ -834,6 +864,22 @@ async def update_admin_inventory(body: InventoryUpdate):
                         await conn.execute("UPDATE bot_workshop.cases_components SET quantity = $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2::int", body.new_quantity, body.item_id)
                     else:
                         await conn.execute("INSERT INTO bot_workshop.cases_components (id, component_name, quantity, last_updated) VALUES ($1::int, 'Нова фурнітура', $2, CURRENT_TIMESTAMP)", body.item_id, body.new_quantity)
+
+                elif body.table_key == 'loot_box_operative':
+                    row = await conn.fetchrow("SELECT quantity FROM bot_workshop.loot_box_operative WHERE item_id = $1", body.item_id)
+                    if row:
+                        old_qty = int(row['quantity'] or 0)
+                        await conn.execute("UPDATE bot_workshop.loot_box_operative SET quantity = $1 WHERE item_id = $2", body.new_quantity, body.item_id)
+                    else:
+                        await conn.execute("INSERT INTO bot_workshop.loot_box_operative (item_id, item_name, quantity) VALUES ($1, $1, $2)", body.item_id, body.new_quantity)
+
+                elif body.table_key == 'loot_box_main':
+                    row = await conn.fetchrow("SELECT quantity FROM bot_workshop.loot_box_main WHERE item_id = $1", body.item_id)
+                    if row:
+                        old_qty = int(row['quantity'] or 0)
+                        await conn.execute("UPDATE bot_workshop.loot_box_main SET quantity = $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2", body.new_quantity, body.item_id)
+                    else:
+                        await conn.execute("INSERT INTO bot_workshop.loot_box_main (item_id, item_name, quantity) VALUES ($1, $1, $2)", body.item_id, body.new_quantity)
 
                 delta = body.new_quantity - old_qty
                 if delta != 0:
@@ -1092,7 +1138,7 @@ async def get_driver_tasks_done():
 
 @app.post("/api/admin/inventory/check")
 async def inventory_check(body: InventoryCheckBody):
-    valid_tables = ('finished', 'operative', 'main', 'cases_empty', 'finished_main', 'components')
+    valid_tables = ('finished', 'operative', 'main', 'cases_empty', 'finished_main', 'components', 'loot_box_operative', 'loot_box_main')
     if body.table_key not in valid_tables:
         raise HTTPException(status_code=400, detail="Invalid table_key")
     p = await get_pool()
@@ -1107,8 +1153,12 @@ async def inventory_check(body: InventoryCheckBody):
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_cases WHERE item_id = $1", body.item_id)
         elif body.table_key == 'finished_main':
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.item_id)
-        else:  # components
+        elif body.table_key == 'components':
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1", int(body.item_id))
+        elif body.table_key == 'loot_box_operative':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.loot_box_operative WHERE item_id = $1", body.item_id)
+        elif body.table_key == 'loot_box_main':
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.loot_box_main WHERE item_id = $1", body.item_id)
 
         system_qty = float(row['quantity']) if row else 0.0
         delta = body.actual_qty - system_qty
@@ -1132,8 +1182,12 @@ async def inventory_check(body: InventoryCheckBody):
             await p.execute("UPDATE bot_workshop.inventory_cases SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
         elif body.table_key == 'finished_main':
             await p.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
-        else:  # components — PK це int id, не item_id
+        elif body.table_key == 'components':
             await p.execute("UPDATE bot_workshop.cases_components SET quantity = $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2", body.actual_qty, int(body.item_id))
+        elif body.table_key == 'loot_box_operative':
+            await p.execute("UPDATE bot_workshop.loot_box_operative SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+        elif body.table_key == 'loot_box_main':
+            await p.execute("UPDATE bot_workshop.loot_box_main SET quantity = $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2", body.actual_qty, body.item_id)
 
         return dict(new_row)
     except HTTPException:
@@ -1298,32 +1352,44 @@ async def run_write_off(dry_run: bool = False):
 
                     if remaining > 0:
                         if is_case:
-                            # B. Кейс: inventory_cases (може йти в мінус) + recipes → inventory_operative
+                            # B. Кейс: inventory_cases списуємо по точному артикулу (article),
+                            # наповнення (recipe + компоненти) — по базовому (base_article)
                             await conn.execute("""
                                 UPDATE bot_workshop.inventory_cases
                                 SET quantity = quantity - $1
                                 WHERE item_id = $2
-                            """, remaining, base_article)
+                            """, remaining, article)
                             recipe = await conn.fetch("""
                                 SELECT item_id, quantity
                                 FROM bot_workshop.recipes
                                 WHERE UPPER(set_id) = $1
                             """, base_article)
                             for ing in recipe:
-                                await conn.execute("""
-                                    UPDATE bot_workshop.inventory_operative
+                                component = ing['item_id']
+                                loot_row = await conn.fetchrow(
+                                    "SELECT item_id FROM bot_workshop.loot_box_operative WHERE item_id = $1",
+                                    component
+                                )
+                                if loot_row:
+                                    target_table = 'bot_workshop.loot_box_operative'
+                                    source_log = 'loot_box_operative'
+                                else:
+                                    target_table = 'bot_workshop.inventory_operative'
+                                    source_log = 'inventory_operative'
+                                await conn.execute(f"""
+                                    UPDATE {target_table}
                                     SET quantity = quantity - $1
                                     WHERE item_id = $2
-                                """, ing['quantity'] * remaining, ing['item_id'])
+                                """, ing['quantity'] * remaining, component)
                                 await conn.execute("""
                                     INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                    VALUES ($1, $2, $3, $4, 'inventory_operative', 'write_off_component')
-                                """, session_id, base_article, ing['item_id'], -(ing['quantity'] * remaining))
+                                    VALUES ($1, $2, $3, $4, $5, 'write_off_component')
+                                """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
                             await conn.execute("""
                                 INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                VALUES ($1, $2, $2, $3, 'inventory_cases', 'write_off_case')
-                            """, session_id, base_article, -remaining)
-                            details.append(f"Списано {remaining} кейсів {base_article} (cases+operative)")
+                                VALUES ($1, $2, $3, $4, 'inventory_cases', 'write_off_case')
+                            """, session_id, base_article, article, -remaining)
+                            details.append(f"Списано {remaining} кейсів {article} (cases+operative)")
                         else:
                             # C. Не кейс: recipes → inventory_operative
                             recipe = await conn.fetch("""
@@ -1333,18 +1399,59 @@ async def run_write_off(dry_run: bool = False):
                             """, base_article)
                             if recipe:
                                 for ing in recipe:
-                                    await conn.execute("""
-                                        UPDATE bot_workshop.inventory_operative
+                                    component = ing['item_id']
+                                    loot_row = await conn.fetchrow(
+                                        "SELECT item_id FROM bot_workshop.loot_box_operative WHERE item_id = $1",
+                                        component
+                                    )
+                                    if loot_row:
+                                        target_table = 'bot_workshop.loot_box_operative'
+                                        source_log = 'loot_box_operative'
+                                    else:
+                                        target_table = 'bot_workshop.inventory_operative'
+                                        source_log = 'inventory_operative'
+                                    await conn.execute(f"""
+                                        UPDATE {target_table}
                                         SET quantity = quantity - $1
                                         WHERE item_id = $2
-                                    """, ing['quantity'] * remaining, ing['item_id'])
+                                    """, ing['quantity'] * remaining, component)
                                     await conn.execute("""
                                         INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                        VALUES ($1, $2, $3, $4, 'inventory_operative', 'write_off_box')
-                                    """, session_id, base_article, ing['item_id'], -(ing['quantity'] * remaining))
-                                details.append(f"Списано {remaining} ящиків {base_article}")
+                                        VALUES ($1, $2, $3, $4, $5, 'write_off_component')
+                                    """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
+                                details.append(f"Списано {remaining} x {base_article} (гриль)")
                             else:
-                                errors.append(f"Рецепт не знайдено: {base_article} (id={s_id})")
+                                # D. Ящик: recipes_lootbox → loot_box_operative або inventory_operative
+                                loot_recipe = await conn.fetch("""
+                                    SELECT item_id, quantity
+                                    FROM bot_workshop.recipes_lootbox
+                                    WHERE UPPER(box_id) = $1
+                                """, base_article)
+                                if loot_recipe:
+                                    for ing in loot_recipe:
+                                        component = ing['item_id']
+                                        loot_row = await conn.fetchrow(
+                                            "SELECT item_id FROM bot_workshop.loot_box_operative WHERE item_id = $1",
+                                            component
+                                        )
+                                        if loot_row:
+                                            target_table = 'bot_workshop.loot_box_operative'
+                                            source_log = 'loot_box_operative'
+                                        else:
+                                            target_table = 'bot_workshop.inventory_operative'
+                                            source_log = 'inventory_operative'
+                                        await conn.execute(f"""
+                                            UPDATE {target_table}
+                                            SET quantity = quantity - $1
+                                            WHERE item_id = $2
+                                        """, ing['quantity'] * remaining, component)
+                                        await conn.execute("""
+                                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                                            VALUES ($1, $2, $3, $4, $5, 'write_off_box')
+                                        """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
+                                    details.append(f"Списано {remaining} x {base_article} (ящик)")
+                                else:
+                                    errors.append(f"Рецепт не знайдено: {base_article}")
                 
                 # Позначаємо як списані
                 if not dry_run:

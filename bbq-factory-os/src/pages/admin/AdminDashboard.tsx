@@ -96,6 +96,8 @@ export function AdminDashboard() {
       case 'inventory_operative': return 'Буфер цеху'
       case 'cases_components': return 'Фурнітура'
       case 'defects': return 'Брак'
+      case 'loot_box_operative': return 'Ящики (буфер)'
+      case 'loot_box_main': return 'Ящики (склад)'
       default: return source
     }
   }
@@ -103,6 +105,7 @@ export function AdminDashboard() {
   const skladAlerts     = alerts.filter(al => al.source === 'inventory_main')
   const furnitureAlerts = alerts.filter(al => al.source === 'cases_components' && !al.is_internal)
   const internalAlerts  = alerts.filter(al => al.source === 'cases_components' && al.is_internal)
+  const lootBoxAlerts   = alerts.filter(al => al.source === 'loot_box_operative' || al.source === 'loot_box_main')
 
   const loadAlerts = loadData
 
@@ -237,6 +240,51 @@ export function AdminDashboard() {
                       </div>
                       <button onClick={() => setReplenishItem({ id: al.id ?? '', name: al.item_id, unit_type: al.unit_type || 'pcs', conversion_factor: al.conversion_factor || 1, is_internal: true })} className="w-full py-2 bg-white/5 hover:bg-white/10 text-white/60 border border-white/10 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
                         Поповнити
+                      </button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+        {/* Акордеон 4: Ящики */}
+        {(() => {
+          const count = lootBoxAlerts.length
+          const isEmpty = count === 0
+          return (
+            <div>
+              <button
+                onClick={() => !isEmpty && setOpenAlertSection(openAlertSection === 'lootbox' ? null : 'lootbox')}
+                className={`w-full flex justify-between items-center p-4 rounded-xl border transition-colors ${isEmpty ? 'bg-[#0a0a0a] border-white/5 cursor-default' : 'bg-[#121212] border-white/10 hover:bg-[#1a1a1a]'}`}
+              >
+                <span className={`font-display text-lg uppercase tracking-wider ${isEmpty ? 'text-white/20' : 'text-white'}`}>
+                  Ящики
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${isEmpty ? 'text-white/20 border-white/10' : 'text-[#c9963a] border-[#c9963a]/30 bg-[#c9963a]/10'}`}>
+                    {count}
+                  </span>
+                  {!isEmpty && (openAlertSection === 'lootbox' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />)}
+                </div>
+              </button>
+              {openAlertSection === 'lootbox' && (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {lootBoxAlerts.map((al, idx) => (
+                    <Card key={idx} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4 flex flex-col justify-between">
+                      <div>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="text-[#c9963a] font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
+                            <AlertTriangle className="w-4 h-4" />{al.item_id}
+                          </span>
+                        </div>
+                        <p className="text-sm font-mono text-white/80 mt-2 mb-4">
+                          Залишок: <span className="text-red-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
+                        </p>
+                        <p className="text-[10px] font-mono text-white/30 uppercase">{formatSource(al.source)}</p>
+                      </div>
+                      <button onClick={() => openOrderModal(al)} className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
+                        Замовити
                       </button>
                     </Card>
                   ))}

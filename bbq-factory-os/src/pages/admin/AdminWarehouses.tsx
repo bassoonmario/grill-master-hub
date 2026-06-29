@@ -32,11 +32,19 @@ interface ComponentRow {
   conversion_factor: number
 }
 
+interface LootBoxRow {
+  sku: string
+  name: string
+  operative: number
+  main: number
+  min_limit?: number
+}
+
 export function AdminWarehouses() {
   const [items, setItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'warehouses' | 'grills' | 'components'>('warehouses')
+  const [activeTab, setActiveTab] = useState<'warehouses' | 'grills' | 'components' | 'loot_boxes'>('warehouses')
   
   const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Record<string, string>>({})
@@ -124,6 +132,38 @@ export function AdminWarehouses() {
     }
   }
 
+  const startEditLootBox = (row: LootBoxRow) => {
+    setEditingSku(row.sku)
+    setEditValues({
+      operative: String(row.operative),
+      main: String(row.main)
+    })
+    setError(null)
+  }
+
+  const saveEditLootBox = async (row: LootBoxRow) => {
+    setIsSyncing(true)
+    setError(null)
+    let hasError = false
+    try {
+      const vOp = parseInt(editValues.operative)
+      const vMain = parseInt(editValues.main)
+
+      if (!isNaN(vOp) && vOp >= 0 && vOp !== row.operative) await api.updateInventory('loot_box_operative', row.sku, vOp)
+      if (!isNaN(vMain) && vMain >= 0 && vMain !== row.main) await api.updateInventory('loot_box_main', row.sku, vMain)
+    } catch (e) {
+      console.error(e)
+      hasError = true
+      setError("Помилка збереження. Спробуйте ще раз.")
+    } finally {
+      if (!hasError) {
+        await loadData()
+        setEditingSku(null)
+      }
+      setIsSyncing(false)
+    }
+  }
+
   const saveEditWarehouse = async (row: WarehouseRow) => {
     setIsSyncing(true)
     setError(null)
@@ -151,6 +191,7 @@ export function AdminWarehouses() {
   const grillsMap = new Map<string, GrillRow>()
   const warehousesMap = new Map<string, WarehouseRow>()
   const componentsMap = new Map<string, ComponentRow>()
+  const lootBoxMap = new Map<string, LootBoxRow>()
 
   const safeItems = items || []
   safeItems.forEach(i => {
@@ -179,12 +220,21 @@ export function AdminWarehouses() {
         unit_type: i.unit_type || 'pcs',
         conversion_factor: i.conversion_factor || 1,
       })
+    } else if (['loot_box_operative', 'loot_box_main'].includes(i.category)) {
+      if (!lootBoxMap.has(i.sku)) lootBoxMap.set(i.sku, { sku: i.sku, name: i.name || i.sku, operative: 0, main: 0 })
+      const entry = lootBoxMap.get(i.sku)!
+      if (i.category === 'loot_box_operative') {
+        entry.operative = i.qty
+        if (i.min_limit !== undefined) entry.min_limit = i.min_limit
+      }
+      if (i.category === 'loot_box_main') entry.main = i.qty
     }
   })
 
   const grills = Array.from(grillsMap.values()).sort((a, b) => a.name.localeCompare(b.name))
   const warehouses = Array.from(warehousesMap.values()).sort((a, b) => a.name.localeCompare(b.name))
   const componentsList = Array.from(componentsMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+  const lootBoxList = Array.from(lootBoxMap.values()).sort((a, b) => a.name.localeCompare(b.name))
 
   return (
     <div className="space-y-6 pb-20">
@@ -209,6 +259,7 @@ export function AdminWarehouses() {
               { key: 'warehouses', label: 'Склади' },
               { key: 'grills', label: 'Грилі' },
               { key: 'components', label: 'Кейс-компоненти' },
+              { key: 'loot_boxes', label: 'Ящики' },
             ]}
             active={activeTab}
             onChange={key => setActiveTab(key as typeof activeTab)}
@@ -253,11 +304,27 @@ export function AdminWarehouses() {
                             </>
                           ) : (
                             <>
-                              <span className="text-center text-[#c9963a] font-mono text-sm">{row.cases_empty}</span>
-                              <span className="text-center text-[#c9963a] font-mono text-sm">{row.ready}</span>
-                              <span className="text-center text-[#c9963a] font-mono text-sm">{row.finished_main}</span>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <div className="flex items-center gap-0.5">
+                                  <span className="text-[#c9963a] font-mono text-sm">{row.cases_empty}</span>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'cases_empty', row.cases_empty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                </div>
+                              </div>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <div className="flex items-center gap-0.5">
+                                  <span className="text-[#c9963a] font-mono text-sm">{row.ready}</span>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'finished', row.ready)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                </div>
+                                {(() => { const chk = checksMap[`finished:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                              </div>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <div className="flex items-center gap-0.5">
+                                  <span className="text-[#c9963a] font-mono text-sm">{row.finished_main}</span>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'finished_main', row.finished_main)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                </div>
+                                {(() => { const chk = checksMap[`finished_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                              </div>
                               <div className="flex items-center gap-0.5">
-                                <button onClick={() => openCheck(row.name, row.sku, 'cases_empty', row.cases_empty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
                                 <button onClick={() => startEditGrill(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                               </div>
                             </>
@@ -305,12 +372,21 @@ export function AdminWarehouses() {
 
                             {editingSku === row.sku
                               ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
-                              : <span className={`text-center font-mono text-xs ${opColor}`}>{row.operative}</span>
+                              : <div className="flex items-center justify-center gap-0.5">
+                                  <span className={`font-mono text-xs ${opColor}`}>{row.operative}</span>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'operative', row.operative)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                </div>
                             }
 
                             {editingSku === row.sku
                               ? <input type="number" value={editValues.main || ''} onChange={e => setEditValues(p => ({...p, main: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
-                              : <span className="text-center text-[#c9963a] font-mono text-xs">{row.main}</span>
+                              : <div className="flex flex-col items-center gap-0.5">
+                                  <div className="flex items-center gap-0.5">
+                                    <span className="text-[#c9963a] font-mono text-xs">{row.main}</span>
+                                    <button onClick={() => openCheck(row.name, row.sku, 'main', row.main)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                  </div>
+                                  {(() => { const chk = checksMap[`main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                </div>
                             }
 
                             {editingSku === row.sku ? (
@@ -320,8 +396,74 @@ export function AdminWarehouses() {
                               </div>
                             ) : (
                               <div className="flex items-center gap-0.5">
-                                <button onClick={() => openCheck(row.name, row.sku, 'operative', row.operative)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
                                 <button onClick={() => startEditWarehouse(row)} className="p-1 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3 h-3" /></button>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+          {activeTab === 'loot_boxes' && (
+            <div className="bg-[#0a0a0a] border border-white/5 rounded-xl shadow-inner max-h-[420px] overflow-y-auto">
+                {lootBoxList.length === 0 ? (
+                  <p className="p-4 text-xs font-mono text-[var(--text-dim)] uppercase">Немає даних</p>
+                ) : (
+                  <div>
+                    <div className="sticky top-0 z-10 bg-[#0a0a0a] grid grid-cols-[2fr_0.8fr_0.8fr_auto] gap-1.5 px-2.5 py-2 border-b border-white/5 text-[9px] font-mono text-white/40 uppercase items-center">
+                      <span>Назва</span>
+                      <span className="text-center">Операт.</span>
+                      <span className="text-center">Основний</span>
+                      <span className="w-7"></span>
+                    </div>
+                    <div className="divide-y divide-white/5">
+                      {lootBoxList.map(row => {
+                        const isCritical = row.min_limit !== undefined && row.operative < row.min_limit
+                        const rowBg = isCritical ? 'bg-red-900/20' : ''
+                        const opColor = isCritical ? 'text-red-400' : 'text-[#c9963a]'
+                        return (
+                          <div key={row.sku} className={`grid grid-cols-[2fr_0.8fr_0.8fr_auto] gap-1.5 px-2.5 py-2 items-center hover:bg-white/5 transition-colors ${rowBg}`}>
+                            <div className="flex flex-col gap-0.5 pr-1">
+                              <span className="text-xs font-mono text-white/80 break-words">{row.name}</span>
+                              {(() => {
+                                const chk = checksMap[`loot_box_operative:${row.sku}`]
+                                if (!chk) return null
+                                const d = chk.delta
+                                return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                              })()}
+                            </div>
+
+                            {editingSku === row.sku
+                              ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
+                              : <div className="flex items-center justify-center gap-0.5">
+                                  <span className={`font-mono text-xs ${opColor}`}>{row.operative}</span>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'loot_box_operative', row.operative)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                </div>
+                            }
+
+                            {editingSku === row.sku
+                              ? <input type="number" value={editValues.main || ''} onChange={e => setEditValues(p => ({...p, main: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
+                              : <div className="flex flex-col items-center gap-0.5">
+                                  <div className="flex items-center gap-0.5">
+                                    <span className="text-[#c9963a] font-mono text-xs">{row.main}</span>
+                                    <button onClick={() => openCheck(row.name, row.sku, 'loot_box_main', row.main)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                  </div>
+                                  {(() => { const chk = checksMap[`loot_box_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                </div>
+                            }
+
+                            {editingSku === row.sku ? (
+                              <div className="flex items-center gap-0.5">
+                                <button onClick={() => saveEditLootBox(row)} disabled={isSyncing} className="p-1 bg-green-900/30 text-green-500 rounded hover:bg-green-900/50">{isSyncing ? <Spinner /> : <Check className="w-3 h-3" />}</button>
+                                <button onClick={cancelEdit} disabled={isSyncing} className="p-1 bg-red-900/30 text-red-500 rounded hover:bg-red-900/50"><X className="w-3 h-3" /></button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-0.5">
+                                <button onClick={() => startEditLootBox(row)} className="p-1 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3 h-3" /></button>
                               </div>
                             )}
                           </div>
