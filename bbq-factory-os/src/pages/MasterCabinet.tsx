@@ -304,33 +304,24 @@ export function MasterCabinet() {
   const groupedShipments = getGroupedShipments()
 
   return (
-    <div className="min-h-screen pb-20 w-full" style={{
-      background: 'linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%)',
-      backgroundImage: 'url("https://www.transparenttextures.com/patterns/dark-wood.png")'
-    }}>
-      <div className="p-4 pt-6 w-full">
-        <div className="flex justify-between items-end mb-6">
-          <div className="mb-4">
-            <h1 className="font-display text-xl md:text-2xl text-[#c9963a] uppercase tracking-wider mb-2">GRILLS FACTORY</h1>
-            <p className="text-[var(--text-dim)] font-mono text-[10px] tracking-widest uppercase mt-1">
-              цикл {data?.cycle || '—'} • {user?.name}
-            </p>
-          </div>
-          {/* Справжня кнопка синхронізації */}
-          <button
-            onClick={loadData}
-            disabled={loading}
-            className="p-3 bg-white/5 border border-white/10 text-white rounded-xl active:scale-95 transition-all disabled:opacity-40"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[var(--orange)]' : ''}`} />
-          </button>
-        </div>
+    <div className="px-1 pt-3 w-full">
 
         {tab === 'plan' && (
-          <div className="grid grid-cols-2 gap-4 mb-8">
-            <StatCard icon={<Target className="w-6 h-6" />} value={data?.potential_earnings || 0} label="План, грн" accent="orange" />
-            <StatCard icon={<DollarSign className="w-6 h-6" />} value={data?.current_earnings || 0} label="Виконано, грн" accent="green" />
-          </div>
+          <>
+            <div className="flex justify-end mb-3">
+              <button
+                onClick={loadData}
+                disabled={loading}
+                className="p-3 bg-white/5 border border-white/10 text-white rounded-xl active:scale-95 transition-all disabled:opacity-40"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[var(--orange)]' : ''}`} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-8">
+              <StatCard icon={<Target className="w-6 h-6" />} value={data?.potential_earnings || 0} label="План, грн" accent="orange" />
+              <StatCard icon={<DollarSign className="w-6 h-6" />} value={data?.current_earnings || 0} label="Виконано, грн" accent="green" />
+            </div>
+          </>
         )}
 
         {/* СЕКЦІЯ ПОПОВНЕННЯ (тільки для can_replenish) */}
@@ -722,7 +713,6 @@ export function MasterCabinet() {
             })}
           </div>
         )}
-      </div>
 
       {editingLog && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm">

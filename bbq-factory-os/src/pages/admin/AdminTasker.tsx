@@ -268,7 +268,7 @@ export function AdminTasker() {
         </div>
       )}
 
-      <Tabs tabs={tabs} active={tab} onChange={k => setTab(k as TabKey)} variant="pill" className="mb-0" />
+      <Tabs tabs={tabs} active={tab} onChange={k => setTab(k as TabKey)} variant="underline" className="mb-0" />
 
       {tab === 'create' && (
         <div className="space-y-5">

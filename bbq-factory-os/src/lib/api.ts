@@ -244,6 +244,21 @@ export interface WriteoffLog {
   operation: string
 }
 
+export interface RecipeGrillGroup {
+  set_id: string
+  components: { item_id: string; quantity: number }[]
+}
+
+export interface RecipeCaseGroup {
+  case_sku: string
+  components: { component_id: number; item_name: string; items_per_case: number }[]
+}
+
+export interface RecipeLootboxGroup {
+  box_id: string
+  components: { item_id: string; quantity: number }[]
+}
+
 // ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
@@ -475,4 +490,25 @@ export const api = {
     const q = qs.toString()
     return get<WriteoffLog[]>(`/api/admin/writeoff-logs${q ? '?' + q : ''}`)
   },
+
+  getCycle: (): Promise<{ cycle: string }> =>
+    get<{ cycle: string }>('/api/cycle'),
+
+  getRecipesGrills: (): Promise<RecipeGrillGroup[]> =>
+    get<RecipeGrillGroup[]>('/api/admin/recipes/grills'),
+
+  getRecipesCasesAdmin: (): Promise<RecipeCaseGroup[]> =>
+    get<RecipeCaseGroup[]>('/api/admin/recipes/cases'),
+
+  getRecipesLootbox: (): Promise<RecipeLootboxGroup[]> =>
+    get<RecipeLootboxGroup[]>('/api/admin/recipes/lootbox'),
+
+  patchRecipeCase: (case_sku: string, component_id: number, items_per_case: number) =>
+    patch<{ updated: number }>('/api/admin/recipes/cases', { case_sku, component_id, items_per_case }),
+
+  patchRecipeGrill: (set_id: string, item_id: string, quantity: number) =>
+    patch<{ updated: number }>('/api/admin/recipes/grills', { set_id, item_id, quantity }),
+
+  patchRecipeLootbox: (box_id: string, item_id: string, quantity: number) =>
+    patch<{ updated: number }>('/api/admin/recipes/lootbox', { box_id, item_id, quantity }),
 }

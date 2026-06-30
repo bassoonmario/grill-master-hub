@@ -316,6 +316,10 @@ async def get_salary():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/cycle")
+async def get_cycle():
+    return {"cycle": current_cycle()}
+
 @app.get("/api/master/shipments")
 async def get_shipments():
     p = await get_pool()
@@ -1470,4 +1474,129 @@ async def run_write_off(dry_run: bool = False):
         errors.append(str(e))
         return {"success": False, "written_off_count": 0, "errors": errors, "details": details}
     
-    return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}        
+    return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}
+
+
+@app.get("/api/admin/recipes/grills")
+async def get_recipes_grills():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT set_id, item_id, quantity
+            FROM bot_workshop.recipes
+            ORDER BY set_id, item_id
+        """)
+        grouped: dict = {}
+        for r in rows:
+            sid = r['set_id']
+            if sid not in grouped:
+                grouped[sid] = []
+            grouped[sid].append({"item_id": r['item_id'], "quantity": r['quantity']})
+        return [{"set_id": k, "components": v} for k, v in grouped.items()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/recipes/cases")
+async def get_recipes_cases():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT rc.case_sku, rc.component_id, cc.component_name AS item_name, rc.items_per_case
+            FROM bot_workshop.recipes_cases rc
+            JOIN bot_workshop.cases_components cc ON cc.id = rc.component_id
+            ORDER BY rc.case_sku, cc.component_name
+        """)
+        grouped: dict = {}
+        for r in rows:
+            sku = r['case_sku']
+            if sku not in grouped:
+                grouped[sku] = []
+            grouped[sku].append({"component_id": r['component_id'], "item_name": r['item_name'], "items_per_case": float(r['items_per_case'])})
+        return [{"case_sku": k, "components": v} for k, v in grouped.items()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/recipes/lootbox")
+async def get_recipes_lootbox():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT box_id, item_id, quantity
+            FROM bot_workshop.recipes_lootbox
+            ORDER BY box_id, item_id
+        """)
+        grouped: dict = {}
+        for r in rows:
+            bid = r['box_id']
+            if bid not in grouped:
+                grouped[bid] = []
+            grouped[bid].append({"item_id": r['item_id'], "quantity": r['quantity']})
+        return [{"box_id": k, "components": v} for k, v in grouped.items()]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RecipeCasePatchBody(BaseModel):
+    case_sku: str
+    component_id: int
+    items_per_case: float
+
+
+@app.patch("/api/admin/recipes/cases")
+async def patch_recipe_case(body: RecipeCasePatchBody):
+    p = await get_pool()
+    try:
+        result = await p.execute("""
+            UPDATE bot_workshop.recipes_cases
+            SET items_per_case = $1
+            WHERE case_sku = $2 AND component_id = $3
+        """, body.items_per_case, body.case_sku, body.component_id)
+        updated = int(result.split()[-1]) if result else 0
+        return {"updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RecipeGrillPatchBody(BaseModel):
+    set_id: str
+    item_id: str
+    quantity: int
+
+
+@app.patch("/api/admin/recipes/grills")
+async def patch_recipe_grill(body: RecipeGrillPatchBody):
+    p = await get_pool()
+    try:
+        result = await p.execute("""
+            UPDATE bot_workshop.recipes
+            SET quantity = $1
+            WHERE item_id = $2
+              AND set_id ~ ('^' || $3 || '([^0-9]|$)')
+        """, body.quantity, body.item_id, body.set_id)
+        updated = int(result.split()[-1]) if result else 0
+        return {"updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RecipeLootboxPatchBody(BaseModel):
+    box_id: str
+    item_id: str
+    quantity: int
+
+
+@app.patch("/api/admin/recipes/lootbox")
+async def patch_recipe_lootbox(body: RecipeLootboxPatchBody):
+    p = await get_pool()
+    try:
+        result = await p.execute("""
+            UPDATE bot_workshop.recipes_lootbox
+            SET quantity = $1
+            WHERE box_id = $2 AND item_id = $3
+        """, body.quantity, body.box_id, body.item_id)
+        updated = int(result.split()[-1]) if result else 0
+        return {"updated": updated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

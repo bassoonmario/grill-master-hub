@@ -229,16 +229,16 @@ export function AdminDashboard() {
               {openAlertSection === 'internal' && (
                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                   {internalAlerts.map((al, idx) => (
-                    <Card key={idx} className="bg-[#0f0f0f] border border-white/10 p-4 flex flex-col justify-between">
+                    <Card key={idx} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4 flex flex-col justify-between">
                       <div>
-                        <span className="text-white/60 font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
-                          <AlertTriangle className="w-4 h-4 text-yellow-500" />{al.item_id}
+                        <span className="text-[#c9963a] font-bold uppercase text-xs flex items-center gap-2 tracking-wider">
+                          <AlertTriangle className="w-4 h-4" />{al.item_id}
                         </span>
                         <p className="text-sm font-mono text-white/80 mt-2 mb-4">
                           Залишок: <span className="text-yellow-400 font-bold">{al.quantity}</span> (Ліміт: {al.limit_val})
                         </p>
                       </div>
-                      <button onClick={() => setReplenishItem({ id: al.id ?? '', name: al.item_id, unit_type: al.unit_type || 'pcs', conversion_factor: al.conversion_factor || 1, is_internal: true })} className="w-full py-2 bg-white/5 hover:bg-white/10 text-white/60 border border-white/10 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
+                      <button onClick={() => setReplenishItem({ id: al.id ?? '', name: al.item_id, unit_type: al.unit_type || 'pcs', conversion_factor: al.conversion_factor || 1, is_internal: true })} className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
                         Поповнити
                       </button>
                     </Card>
