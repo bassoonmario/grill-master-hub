@@ -83,6 +83,55 @@ async def test_history_logs_schema(conn):
     assert required <= cols, f"Відсутні колонки в history_logs: {cols}"
 
 
+@pytest.mark.asyncio
+async def test_wholesale_orders_schema(conn):
+    """wholesale_orders має всі поля що потрібні для опт-резерву/списання."""
+    rows = await conn.fetch("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'bot_workshop' AND table_name = 'wholesale_orders'
+    """)
+    cols = {r['column_name'] for r in rows}
+    required = {
+        'id', 'source', 'source_order_id', 'client_name', 'phone',
+        'items', 'status', 'reserved_at', 'written_off_at', 'created_at',
+    }
+    assert required <= cols, f"Відсутні колонки в wholesale_orders: {cols}"
+
+
+@pytest.mark.asyncio
+async def test_wholesale_orders_unique_constraint(conn):
+    """(source, source_order_id) має бути UNIQUE — гарантія ідемпотентності."""
+    exists = await conn.fetchval("""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'bot_workshop.wholesale_orders'::regclass
+              AND contype = 'u'
+        )
+    """)
+    assert exists, "wholesale_orders не має UNIQUE constraint на (source, source_order_id)"
+
+
+@pytest.mark.asyncio
+async def test_wholesale_reservations_schema(conn):
+    """wholesale_reservations має всі поля та FK на wholesale_orders."""
+    rows = await conn.fetch("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'bot_workshop' AND table_name = 'wholesale_reservations'
+    """)
+    cols = {r['column_name'] for r in rows}
+    required = {'id', 'wholesale_order_id', 'source_table', 'item_id', 'reserved_qty', 'created_at'}
+    assert required <= cols, f"Відсутні колонки в wholesale_reservations: {cols}"
+
+    fk_exists = await conn.fetchval("""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'bot_workshop.wholesale_reservations'::regclass
+              AND contype = 'f'
+        )
+    """)
+    assert fk_exists, "wholesale_reservations не має FK на wholesale_orders"
+
+
 # ── GET /api/stock — перевірка SQL ────────────────────────────────────────────
 
 @pytest.mark.asyncio

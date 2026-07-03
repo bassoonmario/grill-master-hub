@@ -7,6 +7,7 @@ from typing import List, Optional, Any, Literal
 import asyncpg
 import os
 import httpx
+import json
 from datetime import date
 from dotenv import load_dotenv
 import random
@@ -157,6 +158,17 @@ class InventoryCheckBody(BaseModel):
     table_key: str
     actual_qty: float
     note: Optional[str] = None
+
+class WholesaleItem(BaseModel):
+    article: str
+    quantity: float
+
+class WholesaleReserveBody(BaseModel):
+    source: Literal['sd', 'mydrop']
+    source_order_id: str
+    client_name: Optional[str] = None
+    phone: Optional[str] = None
+    items: List[WholesaleItem]
 
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
@@ -1475,6 +1487,214 @@ async def run_write_off(dry_run: bool = False):
         return {"success": False, "written_off_count": 0, "errors": errors, "details": details}
     
     return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}
+
+
+async def _resolve_wholesale_components(conn, article: str, qty: float) -> list:
+    """
+    Розкладає позицію опт-замовлення на резерви по джерелах — та сама каскадна
+    логіка, що й run_write_off (finished → cases+recipe / recipe / recipes_lootbox),
+    але без жодного фізичного UPDATE.
+    """
+    SKIP = {'ГРАВІЮВАННЯ ШАМПУРІВ', 'ЧОХОЛ'}
+    DIRECT_OPERATIVE = {
+        'ЧОХОЛ М': 'Чохол М',
+        'ЧОХОЛ В': 'Чохол В',
+        'ПИЛЬНИК': 'ПИЛЬНИК',
+        'ДОЩЕЧКА': 'дощечка',
+    }
+
+    result = []
+    raw_article = article.strip().upper()
+
+    if raw_article in SKIP:
+        return result
+
+    if raw_article in DIRECT_OPERATIVE:
+        result.append({'source_table': 'operative', 'item_id': DIRECT_OPERATIVE[raw_article], 'qty': qty})
+        return result
+
+    norm_article = raw_article
+    if len(raw_article) <= 5:
+        norm_article = raw_article.replace('С', 'S')
+    base_article = norm_article
+    if not norm_article.startswith('T1'):
+        base_article = norm_article.replace('H', '').replace('T', '')
+
+    finished_row = await conn.fetchrow(
+        "SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", base_article
+    )
+    finished_qty = finished_row['quantity'] if finished_row else 0
+    from_finished = min(finished_qty, qty)
+
+    if from_finished > 0:
+        result.append({'source_table': 'finished', 'item_id': base_article, 'qty': from_finished})
+
+    remaining = qty - from_finished
+    if remaining <= 0:
+        return result
+
+    is_case = await conn.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM bot_workshop.inventory_cases WHERE item_id = $1)", norm_article
+    )
+
+    if is_case:
+        result.append({'source_table': 'cases', 'item_id': norm_article, 'qty': remaining})
+        recipe = await conn.fetch(
+            "SELECT item_id, quantity FROM bot_workshop.recipes WHERE UPPER(set_id) = $1", base_article
+        )
+        for ing in recipe:
+            result.append({'source_table': 'operative', 'item_id': ing['item_id'], 'qty': ing['quantity'] * remaining})
+    else:
+        recipe = await conn.fetch(
+            "SELECT item_id, quantity FROM bot_workshop.recipes WHERE UPPER(set_id) = $1", base_article
+        )
+        if recipe:
+            for ing in recipe:
+                result.append({'source_table': 'operative', 'item_id': ing['item_id'], 'qty': ing['quantity'] * remaining})
+        else:
+            loot_recipe = await conn.fetch(
+                "SELECT item_id, quantity FROM bot_workshop.recipes_lootbox WHERE UPPER(box_id) = $1", base_article
+            )
+            if not loot_recipe:
+                raise ValueError(f"Рецепт не знайдено: {base_article}")
+            for ing in loot_recipe:
+                result.append({'source_table': 'operative', 'item_id': ing['item_id'], 'qty': ing['quantity'] * remaining})
+
+    return result
+
+
+@app.post("/api/wholesale/reserve")
+async def wholesale_reserve(body: WholesaleReserveBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                items_json = json.dumps([item.dict() for item in body.items])
+                order_row = await conn.fetchrow("""
+                    INSERT INTO bot_workshop.wholesale_orders
+                        (source, source_order_id, client_name, phone, items, status, reserved_at)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, 'reserved', CURRENT_TIMESTAMP)
+                    ON CONFLICT (source, source_order_id) DO NOTHING
+                    RETURNING id
+                """, body.source, body.source_order_id, body.client_name, body.phone, items_json)
+
+                if not order_row:
+                    existing_id = await conn.fetchval("""
+                        SELECT id FROM bot_workshop.wholesale_orders
+                        WHERE source = $1 AND source_order_id = $2
+                    """, body.source, body.source_order_id)
+                    return {"status": "already_reserved", "id": existing_id}
+
+                order_id = order_row['id']
+
+                for item in body.items:
+                    components = await _resolve_wholesale_components(conn, item.article, item.quantity)
+                    for comp in components:
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.wholesale_reservations
+                                (wholesale_order_id, source_table, item_id, reserved_qty)
+                            VALUES ($1, $2, $3, $4)
+                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'])
+
+        return {"status": "reserved", "id": order_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in POST /api/wholesale/reserve: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/wholesale/writeoff/{wholesale_order_id}")
+async def wholesale_writeoff(wholesale_order_id: int):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow("""
+                    SELECT id, source, source_order_id, status
+                    FROM bot_workshop.wholesale_orders WHERE id = $1
+                """, wholesale_order_id)
+                if not order:
+                    raise HTTPException(status_code=404, detail="Опт-замовлення не знайдено")
+
+                if order['status'] == 'written_off':
+                    return {"status": "already_written_off", "id": wholesale_order_id}
+
+                reservations = await conn.fetch("""
+                    SELECT source_table, item_id, reserved_qty
+                    FROM bot_workshop.wholesale_reservations
+                    WHERE wholesale_order_id = $1
+                """, wholesale_order_id)
+
+                session_id = str(uuid.uuid4())
+                article_ref = f"{order['source']}:{order['source_order_id']}"
+
+                for r in reservations:
+                    source_table = r['source_table']
+                    item_id = r['item_id']
+                    qty = r['reserved_qty']
+
+                    if source_table == 'finished':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_finished SET quantity = quantity - $1 WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'cases':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_cases SET quantity = quantity - $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'main':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_main SET quantity = quantity - $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'components':
+                        await conn.execute(
+                            "UPDATE bot_workshop.cases_components SET quantity = quantity - $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2::int",
+                            qty, item_id
+                        )
+                    elif source_table == 'operative':
+                        loot_row = await conn.fetchrow(
+                            "SELECT item_id FROM bot_workshop.loot_box_operative WHERE item_id = $1", item_id
+                        )
+                        if loot_row:
+                            await conn.execute(
+                                "UPDATE bot_workshop.loot_box_operative SET quantity = quantity - $1 WHERE item_id = $2",
+                                qty, item_id
+                            )
+                        else:
+                            await conn.execute(
+                                "UPDATE bot_workshop.inventory_operative SET quantity = quantity - $1 WHERE item_id = $2",
+                                qty, item_id
+                            )
+                    else:
+                        raise ValueError(f"Невідома source_table в резерві: {source_table}")
+
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                        VALUES ($1, $2, $3, $4, 'wholesale', 'write_off')
+                    """, session_id, article_ref, item_id, -qty)
+
+                await conn.execute("""
+                    UPDATE bot_workshop.wholesale_orders
+                    SET status = 'written_off', written_off_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                """, wholesale_order_id)
+
+                await conn.execute(
+                    "DELETE FROM bot_workshop.wholesale_reservations WHERE wholesale_order_id = $1",
+                    wholesale_order_id
+                )
+
+        return {"status": "written_off", "id": wholesale_order_id, "items_written_off": len(reservations)}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in POST /api/wholesale/writeoff/{wholesale_order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/admin/recipes/grills")
