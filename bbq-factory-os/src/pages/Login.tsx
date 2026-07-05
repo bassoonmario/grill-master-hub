@@ -11,6 +11,7 @@ const ROLES: { key: Role; label: string; icon: string }[] = [
   { key: 'master', label: 'Майстер', icon: '⚒' },
   { key: 'driver', label: 'Водій',   icon: '🚚' },
   { key: 'admin',  label: 'Шеф',     icon: '👑' },
+  { key: 'office', label: 'Офіс',    icon: '🏢' },
 ]
 
 export function Login() {
@@ -94,7 +95,7 @@ export function Login() {
                 <button key={u.tid}
                   onClick={() => { setSelUser(u); setLoginPin(''); setError(''); setScreen('login-pin') }}
                   className="bg-white/5 border border-white/10 text-[#e8e0d0] p-4 flex items-center gap-3 hover:bg-white/10 transition-all text-left font-['Rajdhani'] text-base font-semibold tracking-wide">
-                  <span className="text-xl">{u.role==='admin'?'👑':u.role==='driver'?'🚚':'⚒'}</span>
+                  <span className="text-xl">{u.role==='admin'?'👑':u.role==='driver'?'🚚':u.role==='office'?'🏢':'⚒'}</span>
                   <span>{u.name}</span>
                 </button>
               ))}

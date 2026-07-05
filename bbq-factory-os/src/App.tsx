@@ -9,6 +9,7 @@ import { Tasker }    from '@/pages/Tasker'
 import { Salary }    from '@/pages/Salary'
 import { MasterCabinet } from '@/pages/MasterCabinet'
 import { AdminCabinet } from '@/pages/AdminCabinet'
+import { OfficeCabinet } from '@/pages/office/OfficeCabinet'
 import { Balance }       from '@/pages/Balance'
 import { Spinner } from '@/components/UI'
 import '@/index.css'
@@ -20,6 +21,7 @@ function PrivateRoute({ children, requireRole }: { children: React.ReactNode, re
   if (requireRole && user.role !== requireRole) {
     if (user.role === 'admin') return <Navigate to="/admin" replace />
     if (user.role === 'master') return <Navigate to="/master" replace />
+    if (user.role === 'office') return <Navigate to="/office" replace />
     return <Navigate to="/" replace />
   }
   return <Layout>{children}</Layout>
@@ -39,16 +41,19 @@ function AppRoutes() {
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
       
       <Route path="/" element={
-  user?.role === 'master' 
-    ? <Navigate to="/master" replace /> 
-    : user?.role === 'admin' 
-    ? <Navigate to="/admin" replace /> 
+  user?.role === 'master'
+    ? <Navigate to="/master" replace />
+    : user?.role === 'admin'
+    ? <Navigate to="/admin" replace />
     : user?.role === 'driver'
     ? <Navigate to="/tasker" replace />
+    : user?.role === 'office'
+    ? <Navigate to="/office" replace />
     : <PrivateRoute><Dashboard /></PrivateRoute>
 } />
 
       <Route path="/admin"     element={<PrivateRoute requireRole="admin"><AdminCabinet /></PrivateRoute>} />
+      <Route path="/office"    element={<PrivateRoute requireRole="office"><OfficeCabinet /></PrivateRoute>} />
 
       <Route path="/warehouse" element={<PrivateRoute><Warehouse /></PrivateRoute>} />
       <Route path="/tasks"     element={<PrivateRoute><Tasks /></PrivateRoute>} />

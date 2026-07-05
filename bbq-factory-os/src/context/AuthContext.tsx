@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 
-export type Role = 'master' | 'driver' | 'admin'
+export type Role = 'master' | 'driver' | 'admin' | 'office'
 
 export interface User {
   tid:           number

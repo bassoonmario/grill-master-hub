@@ -199,6 +199,22 @@ class PickupReserveBody(BaseModel):
     phone: Optional[str] = None
     items: List[PickupItem]
 
+class OfficeTaskCreate(BaseModel):
+    admin_comment: str
+    created_by: Optional[str] = None
+
+class OfficeStockUpdate(BaseModel):
+    item_id: str
+    new_quantity: int
+
+class OfficeStockReceiveItem(BaseModel):
+    item_id: str
+    qty: int
+
+class OfficeStockReceiveBody(BaseModel):
+    task_id: int
+    items: List[OfficeStockReceiveItem]
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -1076,6 +1092,127 @@ async def get_packaging_rules(item_id: str):
     except Exception as e:
         print(f"Error in GET /api/admin/packaging-rules: {e}")
         return {"pcs_per_pack": 0, "packs_per_box": 0, "pcs_per_box": 0}
+
+@app.post("/api/office/tasks")
+async def create_office_task(body: OfficeTaskCreate):
+    p = await get_pool()
+    try:
+        new_id = await p.fetchval("""
+            INSERT INTO bot_workshop.incoming_tasks
+                (item_id, target_qty, status, admin_comment, is_simple, task_type, source_role, created_by)
+            VALUES ('', 0, 'очікується', $1, true, 'simple', 'office', $2)
+            RETURNING id
+        """, body.admin_comment, body.created_by)
+        return {"status": "created", "id": new_id}
+    except Exception as e:
+        print(f"Error in POST /api/office/tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/office/tasks")
+async def get_office_tasks():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, admin_comment, status, created_by,
+                   to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
+                   to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at
+            FROM bot_workshop.incoming_tasks
+            WHERE source_role = 'office'
+            ORDER BY CASE status
+                WHEN 'очікується' THEN 1
+                WHEN 'в роботі' THEN 2
+                WHEN 'прийнято' THEN 3
+                ELSE 4
+            END, created_at DESC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/office/tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/office/pending-orders")
+async def get_office_pending_orders():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, admin_comment, created_by,
+                   to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at, status
+            FROM bot_workshop.incoming_tasks
+            WHERE source_role = 'office' AND status IN ('очікується', 'в роботі')
+            ORDER BY created_at ASC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/office/pending-orders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/office/stock")
+async def get_office_stock():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT item_id, quantity, min_qty,
+                   to_char(last_delivery_date, 'DD.MM.YY HH24:MI') AS last_delivery_date
+            FROM bot_workshop.office_stock
+            ORDER BY item_id
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/office/stock: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/office/stock")
+async def update_office_stock(body: OfficeStockUpdate):
+    p = await get_pool()
+    try:
+        row = await p.fetchrow("""
+            UPDATE bot_workshop.office_stock SET quantity = $1
+            WHERE item_id = $2
+            RETURNING item_id, quantity
+        """, body.new_quantity, body.item_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Артикул не знайдено в office_stock")
+        return dict(row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in PATCH /api/office/stock: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/office/stock/receive")
+async def receive_office_stock(body: OfficeStockReceiveBody):
+    p = await get_pool()
+    try:
+        if not body.items:
+            raise HTTPException(status_code=400, detail="Додайте хоча б один артикул")
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                task = await conn.fetchrow(
+                    "SELECT id FROM bot_workshop.incoming_tasks WHERE id = $1 AND source_role = 'office'",
+                    body.task_id
+                )
+                if not task:
+                    raise HTTPException(status_code=404, detail="Задача офісу не знайдена")
+                for item in body.items:
+                    updated = await conn.fetchval("""
+                        UPDATE bot_workshop.office_stock
+                        SET quantity = quantity + $1, last_delivery_date = CURRENT_TIMESTAMP
+                        WHERE item_id = $2
+                        RETURNING item_id
+                    """, item.qty, item.item_id)
+                    if not updated:
+                        raise HTTPException(status_code=404, detail=f"Артикул {item.item_id} не знайдено в office_stock")
+                await conn.execute("""
+                    UPDATE bot_workshop.incoming_tasks
+                    SET status = 'архів', completed_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                """, body.task_id)
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/office/stock/receive: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/tasks/incoming")
 async def create_incoming_task(body: IncomingTaskCreate):

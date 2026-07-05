@@ -14,7 +14,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   if (!user) return null
 
-  const ROLE_LABELS = { admin: 'Адмін', master: 'Майстер', driver: 'Водій' }
+  const ROLE_LABELS = { admin: 'Адмін', master: 'Майстер', driver: 'Водій', office: 'Офіс' }
 
   return (
     <div

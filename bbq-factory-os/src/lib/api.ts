@@ -312,6 +312,22 @@ export interface RecipeLootboxGroup {
   components: { item_id: string; quantity: number }[]
 }
 
+export interface OfficeTask {
+  id: number
+  admin_comment: string | null
+  status: string
+  created_at: string
+  completed_at: string | null
+  created_by: string | null
+}
+
+export interface OfficeStockRow {
+  item_id: string
+  quantity: number
+  min_qty: number
+  last_delivery_date: string | null
+}
+
 // ─── API METHODS ─────────────────────────────────────────────────────────────
 export const api = {
 
@@ -585,4 +601,23 @@ export const api = {
 
   patchRecipeLootbox: (box_id: string, item_id: string, quantity: number) =>
     patch<{ updated: number }>('/api/admin/recipes/lootbox', { box_id, item_id, quantity }),
+
+  // ─── OFFICE API ─────────────────────────────────────────────────────────────
+  createOfficeTask: (admin_comment: string, created_by?: string) =>
+    post<{ status: string; id: number }>('/api/office/tasks', { admin_comment, created_by }),
+
+  getOfficeTasks: (): Promise<OfficeTask[]> =>
+    get<OfficeTask[]>('/api/office/tasks'),
+
+  getOfficePendingOrders: (): Promise<OfficeTask[]> =>
+    get<OfficeTask[]>('/api/office/pending-orders'),
+
+  getOfficeStock: (): Promise<OfficeStockRow[]> =>
+    get<OfficeStockRow[]>('/api/office/stock'),
+
+  updateOfficeStock: (item_id: string, new_quantity: number) =>
+    patch<{ item_id: string; quantity: number }>('/api/office/stock', { item_id, new_quantity }),
+
+  receiveOfficeStock: (task_id: number, items: { item_id: string; qty: number }[]) =>
+    post<{ status: string }>('/api/office/stock/receive', { task_id, items }),
 }

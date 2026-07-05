@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Box, History, ShieldCheck, Users, Settings } from 'lucide-react'
+import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Box, History, ShieldCheck, Users, Settings, Store, ClipboardList } from 'lucide-react'
 
 interface NavItem {
   path: string
@@ -31,6 +31,13 @@ const ADMIN_ITEMS: NavItem[] = [
   { path: '/admin?tab=system',     icon: Settings,  label: 'Система', roles: ['admin'] },
 ]
 
+const OFFICE_ITEMS: NavItem[] = [
+  { path: '/office?tab=create', icon: ClipboardList, label: 'Створити', roles: ['office'] },
+  { path: '/office?tab=tasks',  icon: Truck,         label: 'Таски',    roles: ['office'] },
+  { path: '/office?tab=shop',   icon: Store,         label: 'Магазин',  roles: ['office'] },
+  { path: '/office?tab=grills', icon: Package,       label: 'Грилі',    roles: ['office'] },
+]
+
 export function BottomNav() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
@@ -47,6 +54,8 @@ export function BottomNav() {
     items = ADMIN_ITEMS
   } else if (user.role === 'master') {
     items = MASTER_ITEMS
+  } else if (user.role === 'office') {
+    items = OFFICE_ITEMS
   } else {
     items = COMMON_ITEMS.filter(i => i.roles.includes(user.role))
   }
@@ -61,6 +70,7 @@ export function BottomNav() {
         // Handle default tabs logic
         if (pathname === '/admin' && !search && item.path === '/admin?tab=dashboard') active = true
         if (pathname === '/master' && !search && item.path === '/master') active = true
+        if (pathname === '/office' && !search && item.path === '/office?tab=create') active = true
         
         return (
           <button

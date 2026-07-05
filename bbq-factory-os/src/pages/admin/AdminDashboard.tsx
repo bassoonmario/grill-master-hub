@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Card, Spinner } from '@/components/UI'
 import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
-import { api, NotificationAlert } from '@/lib/api'
+import { api, NotificationAlert, OfficeTask } from '@/lib/api'
 import { AlertTriangle, Plus, Check, Package, ChevronUp, ChevronDown } from 'lucide-react'
 
 export function AdminDashboard() {
   const [alerts, setAlerts] = useState<NotificationAlert[]>([])
+  const [officeOrders, setOfficeOrders] = useState<OfficeTask[]>([])
   const [loading, setLoading] = useState(true)
 
   // Модалка замовлення
@@ -24,8 +25,12 @@ export function AdminDashboard() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const a = await api.getNotifications()
+      const [a, o] = await Promise.all([
+        api.getNotifications(),
+        api.getOfficePendingOrders().catch((): OfficeTask[] => []),
+      ])
       setAlerts(a)
+      setOfficeOrders(o)
     } catch (e) {
       console.error(e)
     } finally {
@@ -286,6 +291,42 @@ export function AdminDashboard() {
                       <button onClick={() => openOrderModal(al)} className="w-full py-2 bg-[#c9963a]/10 hover:bg-[#c9963a]/20 text-[#c9963a] border border-[#c9963a]/30 rounded-lg text-xs font-bold uppercase tracking-widest active:scale-95 transition-all">
                         Замовити
                       </button>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Акордеон 5: Замовлення офісу */}
+        {(() => {
+          const count = officeOrders.length
+          const isEmpty = count === 0
+          return (
+            <div>
+              <button
+                onClick={() => !isEmpty && setOpenAlertSection(openAlertSection === 'office' ? null : 'office')}
+                className={`w-full flex justify-between items-center p-4 rounded-xl border transition-colors ${isEmpty ? 'bg-[#0a0a0a] border-white/5 cursor-default' : 'bg-[#121212] border-white/10 hover:bg-[#1a1a1a]'}`}
+              >
+                <span className={`font-display text-lg uppercase tracking-wider ${isEmpty ? 'text-white/20' : 'text-white'}`}>
+                  Замовлення офісу
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs font-mono px-2 py-0.5 rounded-full border ${isEmpty ? 'text-white/20 border-white/10' : 'text-[#c9963a] border-[#c9963a]/30 bg-[#c9963a]/10'}`}>
+                    {count}
+                  </span>
+                  {!isEmpty && (openAlertSection === 'office' ? <ChevronUp className="w-5 h-5 text-[#c9963a]" /> : <ChevronDown className="w-5 h-5 text-[#c9963a]" />)}
+                </div>
+              </button>
+              {openAlertSection === 'office' && (
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {officeOrders.map(o => (
+                    <Card key={o.id} className="bg-gradient-to-br from-[#1a1400] to-[#0a0a0a] border border-[#c9963a]/30 p-4">
+                      <p className="text-sm font-mono text-white/80 break-words">{o.admin_comment}</p>
+                      <p className="text-[10px] font-mono text-white/30 uppercase mt-2">
+                        {o.created_by ?? 'Офіс'} · {o.created_at} · {o.status}
+                      </p>
                     </Card>
                   ))}
                 </div>
