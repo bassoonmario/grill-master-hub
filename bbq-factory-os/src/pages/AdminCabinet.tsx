@@ -7,6 +7,7 @@ import { AdminWarehouses } from './admin/AdminWarehouses'
 import { AdminTasker } from './admin/AdminTasker'
 import { AdminMasters } from './admin/AdminMasters'
 import { AdminSystem } from './admin/AdminSystem'
+import { AdminShipments } from './admin/AdminShipments'
 
 export function AdminCabinet() {
   const { user } = useAuth()
@@ -29,6 +30,7 @@ export function AdminCabinet() {
       case 'tasker': return <AdminTasker />
       case 'masters': return <AdminMasters />
       case 'system': return <AdminSystem />
+      case 'shipments': return <AdminShipments />
       default: return <AdminDashboard />
     }
   }

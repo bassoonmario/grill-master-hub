@@ -132,6 +132,55 @@ async def test_wholesale_reservations_schema(conn):
     assert fk_exists, "wholesale_reservations не має FK на wholesale_orders"
 
 
+@pytest.mark.asyncio
+async def test_pickup_orders_schema(conn):
+    """pickup_orders має всі поля що потрібні для самовивіз-резерву/списання/звільнення."""
+    rows = await conn.fetch("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'bot_workshop' AND table_name = 'pickup_orders'
+    """)
+    cols = {r['column_name'] for r in rows}
+    required = {
+        'id', 'source', 'source_order_id', 'client_name', 'phone',
+        'items', 'status', 'reserved_at', 'written_off_at', 'released_at', 'created_at',
+    }
+    assert required <= cols, f"Відсутні колонки в pickup_orders: {cols}"
+
+
+@pytest.mark.asyncio
+async def test_pickup_orders_unique_constraint(conn):
+    """(source, source_order_id) має бути UNIQUE — гарантія ідемпотентності."""
+    exists = await conn.fetchval("""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'bot_workshop.pickup_orders'::regclass
+              AND contype = 'u'
+        )
+    """)
+    assert exists, "pickup_orders не має UNIQUE constraint на (source, source_order_id)"
+
+
+@pytest.mark.asyncio
+async def test_pickup_reservations_schema(conn):
+    """pickup_reservations має всі поля та FK на pickup_orders."""
+    rows = await conn.fetch("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'bot_workshop' AND table_name = 'pickup_reservations'
+    """)
+    cols = {r['column_name'] for r in rows}
+    required = {'id', 'pickup_order_id', 'source_table', 'item_id', 'reserved_qty', 'created_at'}
+    assert required <= cols, f"Відсутні колонки в pickup_reservations: {cols}"
+
+    fk_exists = await conn.fetchval("""
+        SELECT EXISTS(
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'bot_workshop.pickup_reservations'::regclass
+              AND contype = 'f'
+        )
+    """)
+    assert fk_exists, "pickup_reservations не має FK на pickup_orders"
+
+
 # ── GET /api/stock — перевірка SQL ────────────────────────────────────────────
 
 @pytest.mark.asyncio

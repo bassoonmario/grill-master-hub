@@ -25,16 +25,61 @@ services:
       - main-network
     restart: unless-stopped
 
-  mcp-postgres:
-    container_name: mcp-postgres-server
+  bbq-api:
+    container_name: bbq-api
     build:
-      context: ./mcp-server
+      context: ./bbq-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./bbq-api:/app
     env_file:
       - ./bbq-api/.env
     networks:
       - main-network
-    restart: always
+    restart: unless-stopped
 
+  bbq-frontend:
+    container_name: bbq-frontend
+    build:
+      context: ./bbq-factory-os
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    networks:
+      - main-network
+    restart: unless-stopped
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    environment:
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://n8n.wowusik.duckdns.org/
+      - N8N_ENCRYPTION_KEY=BC5ce1G/VVLaSsYPtIE9BRN7duaQs2xP
+      - EXECUTIONS_DATA_MAX_AGE=168
+      - N8N_HOST=n8n.wowusik.duckdns.org
+      - N8N_PROXY_HOPS=1
+    volumes:
+      - /opt/grill-os/n8n-data:/home/node/.n8n
+    networks:
+      - main-network
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=secret123
+      - POSTGRES_DB=bbq_factory
+    volumes:
+      - /opt/grill-os/postgres-data:/var/lib/postgresql/data
+    networks:
+      - main-network
 networks:
   main-network:
     external: true

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert } from '@/lib/api'
-import { SectionTitle, StatCard, Spinner, Card } from '@/components/UI'
+import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem } from '@/lib/api'
+import { SectionTitle, StatCard, Spinner, Card, Tabs } from '@/components/UI'
+import { ShipmentsLog } from '@/components/ShipmentsLog'
 import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus } from 'lucide-react'
 
 interface UnifiedStock {
@@ -29,6 +30,8 @@ export function MasterCabinet() {
   const [data, setData] = useState<MasterDashboard | null>(null)
   const [logs, setLogs] = useState<MasterLog[]>([])
   const [shipments, setShipments] = useState<Shipment[]>([])
+  const [wholesaleItems, setWholesaleItems] = useState<MasterWholesaleItem[]>([])
+  const [shipmentsSubTab, setShipmentsSubTab] = useState<'log' | 'wholesale'>('log')
   const [defects, setDefects] = useState<Defect[]>([])
   const [loading, setLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -42,9 +45,8 @@ export function MasterCabinet() {
 
   const [unifiedItems, setUnifiedItems] = useState<UnifiedStock[]>([])
 
-  // Стейт для акордеонів: балансу складу та групування відправок за днями
+  // Стейт для акордеону балансу складу
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
-  const [openShipmentDays, setOpenShipmentDays] = useState<Record<string, boolean>>({})
 
   const [replenishAlerts, setReplenishAlerts] = useState<ReplenishAlert[]>([])
   const [replenishLoading, setReplenishLoading] = useState<Record<number, boolean>>({})
@@ -68,7 +70,7 @@ export function MasterCabinet() {
     if (!user) return
     try {
       setLoading(true)
-      const [d, l, items, s, df, stock, alerts] = await Promise.all([
+      const [d, l, items, s, df, stock, alerts, wholesale] = await Promise.all([
         api.getMasterDashboard(user.name),
         api.getMasterLogs(user.name),
         api.getItems(),
@@ -76,6 +78,7 @@ export function MasterCabinet() {
         api.getDefects(),
         api.stock(),
         user.can_replenish ? api.getReplenishAlerts() : Promise.resolve([]),
+        api.getMasterWholesale(),
       ])
       setData(d)
       setLogs(l)
@@ -90,6 +93,7 @@ export function MasterCabinet() {
       setShipments(parsedShipments)
       setDefects(df)
       setReplenishAlerts(alerts)
+      setWholesaleItems(wholesale)
 
       const filtered = stock.filter(i =>
         i.category === 'ready' ||
@@ -122,16 +126,6 @@ export function MasterCabinet() {
       })
       setLocalFacts(initialFacts)
 
-      // Автоматично розгортаємо найновіший день у відправках
-      if (s.length > 0) {
-        const sortedDates = [...new Set(s.map(item => item.report_date))].sort(
-          (a, b) => new Date(b).getTime() - new Date(a).getTime()
-        )
-        if (sortedDates[0]) {
-          setOpenShipmentDays(prev => ({ [sortedDates[0]]: true, ...prev }))
-        }
-      }
-
     } finally {
       setLoading(false)
     }
@@ -145,10 +139,6 @@ export function MasterCabinet() {
 
   const toggleGroup = (id: string) => {
     setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }))
-  }
-
-  const toggleShipmentDay = (date: string) => {
-    setOpenShipmentDays(prev => ({ ...prev, [date]: !prev[date] }))
   }
 
   const handleLogWork = async (taskId: number, itemCode: string, newTotal: number, currentCompleted: number) => {
@@ -236,72 +226,7 @@ export function MasterCabinet() {
     }
   }
 
-  // ── ГРУПУВАННЯ ВІДПРАВОК — читаємо готові дані з БД, без парсингу ──
-  const skuSortKey = (sku: string): number => {
-    const match = sku.match(/^[GTМВ]*(\d+)/i)
-    return match ? parseInt(match[1]) : 9999
-  }
-
-  const getGroupedShipments = () => {
-    type DayItem = {
-      article: string
-      quantity: number
-      extras: Record<string, number | string>
-      pickup_time: string | null
-    }
-    type DayData = {
-      categories: Record<string, DayItem[]>
-      total: number
-      pilnykCount: number
-      hasWholesale: boolean
-    }
-
-    const grouped: Record<string, DayData> = {}
-
-    shipments.forEach(s => {
-      const date = s.report_date
-      if (!grouped[date]) {
-        grouped[date] = {
-          categories: {},
-          total: 0,
-          pilnykCount: 0,
-          hasWholesale: false,
-        }
-      }
-      const day = grouped[date]
-
-      // Пильник — окремо в футер
-      if (s.category === 'Пильник') {
-        day.pilnykCount += s.quantity
-        return
-      }
-
-      // Опт — додаємо префікс до назви категорії
-      const catKey = s.is_wholesale ? `⚡️ Опт — ${s.category}` : s.category
-      if (!day.categories[catKey]) day.categories[catKey] = []
-
-      day.categories[catKey].push({
-        article: s.article,
-        quantity: s.quantity,
-        extras: s.extras || {},
-        pickup_time: s.pickup_time ?? null,
-      })
-
-      // Total — не рахуємо Ящик і Бар (як в n8n totalCount)
-      if (!['Ящик', 'Бар'].includes(s.category)) {
-        day.total += s.quantity
-      }
-
-      if (s.is_wholesale) day.hasWholesale = true
-    })
-
-    return grouped
-  }
-
-
   if (loading && !data) return <Spinner />
-
-  const groupedShipments = getGroupedShipments()
 
   return (
     <div className="px-1 pt-3 w-full">
@@ -538,107 +463,37 @@ export function MasterCabinet() {
         {/* ВКЛАДКА 3: ВІДПРАВКИ */}
         {tab === 'shipments' && (
           <div className="space-y-3">
-            <SectionTitle>Лог відправок готової продукції</SectionTitle>
-            {Object.keys(groupedShipments).length === 0 ? (
-              <p className="text-xs text-[var(--text-dim)] font-mono text-center py-8">Відправок не знайдено</p>
-            ) : (
-              Object.entries(groupedShipments)
-                .sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime())
-                .map(([date, dayData]) => {
-                  const isOpen = !!openShipmentDays[date]
-                  const formattedDate = new Date(date + 'T12:00:00').toLocaleDateString('uk-UA', {
-                    day: 'numeric', month: 'long', year: 'numeric'
-                  })
+            <Tabs
+              tabs={[
+                { key: 'log', label: 'Відправки' },
+                { key: 'wholesale', label: 'Опт' },
+              ]}
+              active={shipmentsSubTab}
+              onChange={k => setShipmentsSubTab(k as 'log' | 'wholesale')}
+              variant="underline"
+            />
 
-                  // Порядок секцій як в ТГ, опт — після звичайних
-                  const SECTION_ORDER = [
-                    'Звичайні', 'Гравіювання', 'Туристичний', 'Бар', 'Ящик', 'Самовивіз',
-                    '⚡️ Опт — Звичайні', '⚡️ Опт — Гравіювання', '⚡️ Опт — Туристичний',
-                    '⚡️ Опт — Бар', '⚡️ Опт — Ящик', '⚡️ Опт — Самовивіз',
-                  ]
-                  const EXTRA_ORDER: Record<string, number> = {
-                    'горіх': 1, 'без лого': 2, 'х2': 3, 'чохол': 4,
-                    'шамп': 5, 'шамп 2 сторони': 6, 'грав кейс': 7, 'note': 8
-                  }
+            {shipmentsSubTab === 'log' && (
+              <ShipmentsLog shipments={shipments} />
+            )}
 
-                  return (
-                    <div key={date} className="border border-white/5 rounded-2xl overflow-hidden bg-white/5 backdrop-blur-md">
-                      <button
-                        onClick={() => toggleShipmentDay(date)}
-                        className="w-full p-4 flex items-center justify-between bg-white/[0.02] active:bg-white/[0.05] transition-colors"
-                      >
-                        <span className="font-mono text-sm font-bold text-white tracking-wide">{formattedDate}</span>
-                        {isOpen ? <ChevronUp className="text-white/20" /> : <ChevronDown className="text-white/20" />}
-                      </button>
-
-                      {isOpen && (
-                        <div className="px-4 pb-4 pt-3 space-y-4 bg-black/40 border-t border-white/5 animate-in slide-in-from-top-2 duration-200">
-
-                          {SECTION_ORDER.map(catName => {
-                            const items = dayData.categories[catName]
-                            if (!items || items.length === 0) return null
-
-                            const isOpt = catName.startsWith('⚡️')
-                            const displayName = isOpt ? catName : catName
-
-                            return (
-                              <div key={catName}>
-                                <p className={`text-[11px] font-bold uppercase tracking-widest mb-1.5 ${isOpt ? 'text-blue-400' : 'text-[#c9963a]'}`}>
-                                  {displayName}
-                                </p>
-                                <ul className="space-y-[3px]">
-                                  {[...items]
-                                    .sort((a, b) => skuSortKey(a.article) - skuSortKey(b.article))
-                                    .map((item, idx) => {
-                                      // Extras — сортуємо і рендеримо
-                                      const sortedExtras = Object.entries(item.extras)
-                                        .filter(([, v]) => v && v !== 0)
-                                        .sort((a, b) => (EXTRA_ORDER[a[0]] ?? 99) - (EXTRA_ORDER[b[0]] ?? 99))
-
-                                      const parts: string[] = sortedExtras.map(([k, v]) => {
-                                        if (k === 'х2') return 'х2'
-                                        if (k === 'note') return String(v)
-                                        return `${v} ${k}`
-                                      })
-                                      if (item.pickup_time) parts.push(item.pickup_time)
-
-                                      const extrasStr = parts.length > 0 ? ` (${parts.join(', ')})` : ''
-
-                                      return (
-                                        <li key={idx} className="flex items-baseline gap-1.5 font-mono text-[13px]">
-                                          <span className="text-white/30">•</span>
-                                          <span className="text-white font-medium">{item.article}</span>
-                                          <span className="text-white/40">—</span>
-                                          <span className="text-[#4ade80] font-bold">{item.quantity}</span>
-                                          {extrasStr && (
-                                            <span className="text-white/50 text-[11px]">{extrasStr}</span>
-                                          )}
-                                        </li>
-                                      )
-                                    })}
-                                </ul>
-                              </div>
-                            )
-                          })}
-
-                          {/* Футер */}
-                          <div className="pt-2 border-t border-white/5 space-y-0.5">
-                            <div className="flex justify-between items-center">
-                              <span className="text-[11px] font-mono text-white/40 uppercase tracking-wider">Підсумок дня:</span>
-                              <span className="text-[13px] font-mono font-bold text-white">Разом — {dayData.total} шт</span>
-                            </div>
-                            {dayData.pilnykCount > 0 && (
-                              <div className="flex justify-end">
-                                <span className="text-[12px] font-mono text-[#c9963a]">Пильник — {dayData.pilnykCount} шт</span>
-                              </div>
-                            )}
-                          </div>
-
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
+            {shipmentsSubTab === 'wholesale' && (
+              <div className="space-y-3">
+                <SectionTitle>Опт — що зробити</SectionTitle>
+                {wholesaleItems.length === 0 ? (
+                  <p className="text-xs text-[var(--text-dim)] font-mono text-center py-8">Активних оптових позицій немає</p>
+                ) : (
+                  <ul className="space-y-[3px]">
+                    {wholesaleItems.map((item, idx) => (
+                      <li key={idx} className="flex items-baseline gap-1.5 font-mono text-[13px] bg-white/5 border border-white/10 rounded-xl px-4 py-3">
+                        <span className="text-white font-medium">{item.article}</span>
+                        <span className="text-white/40">—</span>
+                        <span className="text-[#4ade80] font-bold">{item.qty}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
         )}

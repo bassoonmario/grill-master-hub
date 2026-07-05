@@ -26,6 +26,7 @@ const ADMIN_ITEMS: NavItem[] = [
   { path: '/admin?tab=dashboard',  icon: BarChart3, label: 'Дашборд', roles: ['admin'] },
   { path: '/admin?tab=warehouses', icon: Package,   label: 'Склади',  roles: ['admin'] },
   { path: '/admin?tab=tasker',     icon: Truck,     label: 'Таскер',  roles: ['admin'] },
+  { path: '/admin?tab=shipments',  icon: Truck,     label: 'Відправки', roles: ['admin'] },
   { path: '/admin?tab=masters',    icon: Users,     label: 'Персонал',roles: ['admin'] },
   { path: '/admin?tab=system',     icon: Settings,  label: 'Система', roles: ['admin'] },
 ]

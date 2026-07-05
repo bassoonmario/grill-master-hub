@@ -21,7 +21,14 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body)
   })
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (!res.ok) {
+    let detail = `API error ${res.status}`
+    try {
+      const data = await res.json()
+      if (typeof data?.detail === 'string') detail = data.detail
+    } catch {}
+    throw new Error(detail)
+  }
   return res.json()
 }
 
@@ -130,6 +137,50 @@ export interface Shipment {
   extras: Record<string, number | string>
   pickup_time: string | null
   is_wholesale: boolean
+  finished_main_qty: number
+  finished_main_available: number
+  is_written_off: boolean
+}
+
+export interface ShipmentSourceBody {
+  report_date: string
+  article: string
+  finished_main_qty: number
+  tid: number
+}
+
+export interface RetroactiveSourceBody {
+  report_date: string
+  article: string
+  finished_main_qty: number
+  tid: number
+}
+
+export interface MasterWholesaleItem {
+  article: string
+  qty: number
+}
+
+export interface WholesaleOrderItem {
+  order_id: number
+  article: string
+  qty: number
+  from_master: number
+  from_warehouse: number
+  from_scratch: number
+}
+
+export interface WholesaleComponentRow {
+  item_id: string
+  reserved: number
+  available: number
+}
+
+export interface WholesaleSourceBody {
+  article: string
+  from_master: number
+  from_warehouse: number
+  from_scratch: number
 }
 
 export interface Defect {
@@ -401,9 +452,30 @@ export const api = {
   getDefects: (): Promise<Defect[]> =>
     get<Defect[]>('/api/master/defects'),
 
+  getMasterWholesale: (): Promise<MasterWholesaleItem[]> =>
+    get<MasterWholesaleItem[]>('/api/master/wholesale'),
+
+  setShipmentSource: (body: ShipmentSourceBody): Promise<{ status: string }> =>
+    patch<{ status: string }>('/api/master/shipments/source', body),
+
+  setShipmentRetroactiveSource: (body: RetroactiveSourceBody): Promise<{ status: string }> =>
+    post<{ status: string }>('/api/master/shipments/retroactive-source', body),
+
   // ─── ADMIN API ──────────────────────────────────────────────────────────────
   getGlobalStats: (): Promise<GlobalStat[]> =>
     get<GlobalStat[]>('/api/admin/masters/global-stats'),
+
+  getShipmentsAdmin: (): Promise<Shipment[]> =>
+    get<Shipment[]>('/api/admin/shipments'),
+
+  getWholesaleItems: (): Promise<WholesaleOrderItem[]> =>
+    get<WholesaleOrderItem[]>('/api/admin/wholesale/items'),
+
+  getWholesaleOverview: (): Promise<WholesaleComponentRow[]> =>
+    get<WholesaleComponentRow[]>('/api/admin/wholesale-overview'),
+
+  setWholesaleSource: (orderId: number, body: WholesaleSourceBody): Promise<{ status: string }> =>
+    post<{ status: string }>(`/api/admin/wholesale/${orderId}/source`, body),
 
   getNotifications: (): Promise<NotificationAlert[]> =>
     get<NotificationAlert[]>('/api/notifications?role=admin'),

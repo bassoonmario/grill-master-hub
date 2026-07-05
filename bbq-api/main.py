@@ -170,6 +170,35 @@ class WholesaleReserveBody(BaseModel):
     phone: Optional[str] = None
     items: List[WholesaleItem]
 
+class WholesaleSourceBody(BaseModel):
+    article: str
+    from_master: float
+    from_warehouse: float
+    from_scratch: float
+
+class ShipmentSourceBody(BaseModel):
+    report_date: date
+    article: str
+    finished_main_qty: int
+    tid: int
+
+class RetroactiveSourceBody(BaseModel):
+    report_date: date
+    article: str
+    finished_main_qty: int
+    tid: int
+
+class PickupItem(BaseModel):
+    article: str
+    quantity: float
+
+class PickupReserveBody(BaseModel):
+    source: str
+    source_order_id: str
+    client_name: Optional[str] = None
+    phone: Optional[str] = None
+    items: List[PickupItem]
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -332,17 +361,306 @@ async def get_salary():
 async def get_cycle():
     return {"cycle": current_cycle()}
 
+async def _fetch_shipments(conn) -> list:
+    rows = await conn.fetch("""
+        SELECT report_date, category, article, quantity,
+               extras, pickup_time, is_wholesale
+        FROM bot_workshop.shipment_lists
+        ORDER BY report_date DESC, id ASC
+    """)
+
+    # finished_main override — daily_shipments і shipment_lists різні таблиці
+    # без FK (shipment_lists будується зовнішнім процесом з агрегацією/extras-
+    # згортанням), тож зіставляємо по (report_date, нормалізований article),
+    # тією ж _normalize_article, що й run_write_off.
+    pending = await conn.fetch("""
+        SELECT report_date, article, COALESCE(finished_main_qty, 0) AS finished_main_qty
+        FROM bot_workshop.daily_shipments
+        WHERE is_written_off = false AND COALESCE(finished_main_qty, 0) > 0
+    """)
+    override_map = {}
+    for r in pending:
+        _, base_article = _normalize_article(r['article'])
+        key = (r['report_date'], base_article)
+        override_map[key] = override_map.get(key, 0) + r['finished_main_qty']
+
+    fm_stock_rows = await conn.fetch("SELECT item_id, quantity FROM bot_workshop.inventory_finished_main")
+    fm_stock = {r['item_id'].strip().upper(): r['quantity'] for r in fm_stock_rows}
+
+    # is_written_off — за (report_date, base_article): True лише якщо існує
+    # хоч один daily_shipments рядок для цього ключа І всі такі рядки вже
+    # списані. Потрібно фронтенду, щоб показувати ретроактивний контроль
+    # тільки для вже списаних позицій (а не для ще pending).
+    ds_rows = await conn.fetch("SELECT report_date, article, is_written_off FROM bot_workshop.daily_shipments")
+    written_off_map = {}
+    for r in ds_rows:
+        _, base = _normalize_article(r['article'])
+        key = (r['report_date'], base)
+        written_off_map[key] = written_off_map.get(key, True) and r['is_written_off']
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        _, base_article = _normalize_article(d['article'])
+        key = (d['report_date'], base_article)
+        d['finished_main_qty'] = override_map.get(key, 0)
+        d['finished_main_available'] = fm_stock.get(base_article, 0)
+        d['is_written_off'] = written_off_map.get(key, False)
+        result.append(d)
+    return result
+
 @app.get("/api/master/shipments")
 async def get_shipments():
     p = await get_pool()
     try:
-        rows = await p.fetch("""
-            SELECT report_date, category, article, quantity, 
-                   extras, pickup_time, is_wholesale
-            FROM bot_workshop.shipment_lists
-            ORDER BY report_date DESC, id ASC
-        """)
-        return [dict(r) for r in rows]
+        return await _fetch_shipments(p)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/shipments")
+async def get_shipments_admin():
+    p = await get_pool()
+    try:
+        return await _fetch_shipments(p)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Вова, Матей — тільки ці двоє бачать/використовують інлайн-контроль джерела
+# для звичайних відправок (не роль, конкретні tid). Фронтенд ховає контрол,
+# бекенд тут — друга лінія захисту (див. відоме обмеження нижче).
+SHIPMENT_SOURCE_OVERRIDE_WHITELIST = {417930, 397956}
+
+@app.patch("/api/master/shipments/source")
+async def set_shipment_source(body: ShipmentSourceBody):
+    # НЕ справжня авторизація — tid надсилається клієнтом, не звіряється з
+    # жодною сесією/токеном (їх в апці взагалі немає). Зупиняє випадкове
+    # використання через звичайний UI, не навмисний спуфінг.
+    if body.tid not in SHIPMENT_SOURCE_OVERRIDE_WHITELIST:
+        raise HTTPException(status_code=403, detail="Немає доступу до цієї функції")
+
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                _, base_article = _normalize_article(body.article)
+
+                NOT_OVERRIDABLE = {'ГРАВІЮВАННЯ ШАМПУРІВ', 'ЧОХОЛ', 'ЧОХОЛ М', 'ЧОХОЛ В', 'ПИЛЬНИК', 'ДОЩЕЧКА'}
+                if base_article in NOT_OVERRIDABLE:
+                    raise HTTPException(status_code=400, detail="Ця позиція не підтримує розподіл джерела")
+
+                if body.finished_main_qty < 0:
+                    raise HTTPException(status_code=400, detail="Кількість не може бути від'ємною")
+
+                fm_row = await conn.fetchrow(
+                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", base_article
+                )
+                fm_available = fm_row['quantity'] if fm_row else 0
+                if body.finished_main_qty > fm_available:
+                    raise HTTPException(status_code=400, detail=f"Перевищує наявність на складі ({fm_available})")
+
+                rows = await conn.fetch("""
+                    SELECT id, article, quantity FROM bot_workshop.daily_shipments
+                    WHERE report_date = $1 AND is_written_off = false
+                """, body.report_date)
+
+                matching = []
+                for r in rows:
+                    _, r_base = _normalize_article(r['article'])
+                    if r_base == base_article:
+                        matching.append(r)
+
+                if not matching:
+                    raise HTTPException(status_code=404, detail="Відправку не знайдено на цю дату")
+
+                total_qty = sum(r['quantity'] for r in matching)
+                if body.finished_main_qty > total_qty:
+                    raise HTTPException(status_code=400, detail=f"Перевищує кількість позиції ({total_qty})")
+
+                # Скидаємо і перерозподіляємо детерміновано по id — кожен рядок
+                # отримує не більше за власний quantity.
+                matching.sort(key=lambda r: r['id'])
+                remaining = body.finished_main_qty
+                for r in matching:
+                    take = min(remaining, r['quantity'])
+                    await conn.execute(
+                        "UPDATE bot_workshop.daily_shipments SET finished_main_qty = $1 WHERE id = $2",
+                        take, r['id']
+                    )
+                    remaining -= take
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Операції, що представляють фактичне списання каскаду (те, що ретроактивна
+# корекція має право відкотити). write_off_finished_main/-retroactive НЕ
+# входять — ці рядки вже й так відображають списання зі складу, а не каскаду,
+# їх відкочувати не потрібно (і не можна, інакше склад отримає подвійний
+# приход).
+CASCADE_WRITE_OFF_OPERATIONS = (
+    'write_off_direct', 'write_off_finished', 'write_off_component',
+    'write_off_case', 'write_off_box',
+)
+
+# Мапа джерела (history_logs.source) → таблиця інвентарю, куди повертаємо
+# кількість при відкоті. Дзеркало таблиць, які саме run_write_off списує.
+REVERSAL_TARGET_TABLE = {
+    'inventory_operative': 'bot_workshop.inventory_operative',
+    'loot_box_operative': 'bot_workshop.loot_box_operative',
+    'inventory_finished': 'bot_workshop.inventory_finished',
+    'inventory_cases': 'bot_workshop.inventory_cases',
+}
+
+@app.post("/api/master/shipments/retroactive-source")
+async def set_shipment_retroactive_source(body: RetroactiveSourceBody):
+    # Той самий whitelist, що й у pre-writeoff контролі — див. коментар там.
+    if body.tid not in SHIPMENT_SOURCE_OVERRIDE_WHITELIST:
+        raise HTTPException(status_code=403, detail="Немає доступу до цієї функції")
+
+    if body.finished_main_qty <= 0:
+        raise HTTPException(status_code=400, detail="Кількість має бути більшою за нуль")
+
+    if body.report_date > date.today():
+        raise HTTPException(status_code=400, detail="report_date не може бути в майбутньому")
+    if (date.today() - body.report_date).days > 7:
+        raise HTTPException(status_code=400, detail="Ретроактивна корекція доступна лише для відправок за останні 7 днів")
+
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                _, base_article = _normalize_article(body.article)
+
+                rows = await conn.fetch("""
+                    SELECT id, article, quantity, is_written_off FROM bot_workshop.daily_shipments
+                    WHERE report_date = $1
+                """, body.report_date)
+                matching = [r for r in rows if _normalize_article(r['article'])[1] == base_article]
+
+                if not matching:
+                    raise HTTPException(status_code=404, detail="Відправку не знайдено на цю дату")
+
+                if not all(r['is_written_off'] for r in matching):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Ця позиція ще не повністю списана — використайте звичайний контроль джерела (до списання)"
+                    )
+
+                total_qty = sum(r['quantity'] for r in matching)
+
+                # Знаходимо каскадні рядки history_logs, які реально відповідають
+                # цьому (report_date, article) — ТІЛЬКИ якщо вони позначені
+                # write_off_session_id/report_date (тобто оброблені ПІСЛЯ
+                # структурного фіксу). SQL `report_date = $2` сам по собі вже
+                # відсікає старі рядки з report_date IS NULL (NULL = X ніколи
+                # не TRUE) — write_off_session_id IS NOT NULL додано як
+                # явна другорядна перевірка (в поточному коді вони завжди
+                # ставляться разом, в одному INSERT).
+                hist_rows = await conn.fetch(f"""
+                    SELECT id, component, qty, source, operation, write_off_session_id
+                    FROM bot_workshop.history_logs
+                    WHERE article = $1 AND report_date = $2
+                      AND write_off_session_id IS NOT NULL
+                      AND operation = ANY($3::text[])
+                """, base_article, body.report_date, list(CASCADE_WRITE_OFF_OPERATIONS))
+
+                if not hist_rows:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Це списання відбулось до впровадження відстеження по датах "
+                            "(write_off_session_id/report_date відсутні в history_logs) — "
+                            "неможливо безпечно визначити, що саме було списано. "
+                            "Ретроактивна корекція для цього запису недоступна."
+                        )
+                    )
+
+                # Скільки вже було ретроактивно скориговано раніше для цього
+                # (report_date, article) — щоб повторні виклики не відкочували
+                # більше, ніж було фактично списано.
+                already_corrected = await conn.fetchval("""
+                    SELECT COALESCE(SUM(-qty), 0) FROM bot_workshop.history_logs
+                    WHERE article = $1 AND report_date = $2
+                      AND operation = 'write_off_finished_main_retroactive'
+                """, base_article, body.report_date)
+
+                if already_corrected + body.finished_main_qty > total_qty:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Перевищує кількість позиції ({total_qty}), з них вже "
+                            f"скориговано раніше: {already_corrected}"
+                        )
+                    )
+
+                fm_row = await conn.fetchrow(
+                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", base_article
+                )
+                fm_available = fm_row['quantity'] if fm_row else 0
+                if body.finished_main_qty > fm_available:
+                    raise HTTPException(status_code=400, detail=f"Перевищує наявність на складі ({fm_available})")
+
+                fraction = body.finished_main_qty / total_qty
+                correction_session_id = str(uuid.uuid4())
+                reversed_components = []
+                remainder_notes = []
+
+                for hr in hist_rows:
+                    target_table = REVERSAL_TARGET_TABLE.get(hr['source'])
+                    if not target_table:
+                        # Не повинно траплятись за нормальної роботи каскаду —
+                        # краще зупинити корекцію, ніж мовчки пропустити рядок.
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Невідоме джерело в history_logs: {hr['source']} (id={hr['id']})"
+                        )
+
+                    original_deducted = -hr['qty']  # qty в history_logs завжди від'ємний для списання
+                    exact_reversal = original_deducted * fraction
+                    reversal_amount = int(exact_reversal)  # округлення ВНИЗ, залишок — нижче
+                    remainder = exact_reversal - reversal_amount
+
+                    if remainder > 0:
+                        remainder_notes.append({
+                            "component": hr['component'],
+                            "source": hr['source'],
+                            "remainder": round(remainder, 4),
+                        })
+
+                    if reversal_amount > 0:
+                        await conn.execute(f"""
+                            UPDATE {target_table}
+                            SET quantity = quantity + $1
+                            WHERE item_id = $2
+                        """, reversal_amount, hr['component'])
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.history_logs
+                                (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                            VALUES ($1, $2, $3, $4, $5, 'write_off_reversal', $1, $6)
+                        """, correction_session_id, base_article, hr['component'], reversal_amount, hr['source'], body.report_date)
+                        reversed_components.append({"component": hr['component'], "source": hr['source'], "qty": reversal_amount})
+
+                await conn.execute("""
+                    UPDATE bot_workshop.inventory_finished_main
+                    SET quantity = quantity - $1
+                    WHERE item_id = $2
+                """, body.finished_main_qty, base_article)
+                await conn.execute("""
+                    INSERT INTO bot_workshop.history_logs
+                        (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                    VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main_retroactive', $1, $4)
+                """, correction_session_id, base_article, -body.finished_main_qty, body.report_date)
+
+        return {
+            "status": "ok",
+            "reversed": reversed_components,
+            "finished_main_deducted": body.finished_main_qty,
+            "remainder_notes": remainder_notes,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1267,6 +1585,22 @@ async def get_writeoff_logs(
         print(f"Error in GET /api/admin/writeoff-logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _normalize_article(raw_article: str) -> tuple:
+    """
+    Нормалізує сирий артикул так само, як історично робив run_write_off:
+    uppercase+strip, кирилиця С→S для коротких кодів, потім base_article
+    без H/T суфіксів (крім T1/T1S). Повертає (article, base_article).
+    Спільна функція для run_write_off і override-логіки finished_main —
+    НЕ для wholesale-каскаду (_resolve_wholesale_components має власну копію).
+    """
+    article = raw_article.strip().upper()
+    if len(article) <= 5:
+        article = article.replace('С', 'S')
+    base_article = article
+    if not article.startswith('T1'):
+        base_article = article.replace('H', '').replace('T', '')
+    return article, base_article
+
 @app.post("/api/admin/write-off")
 async def run_write_off(dry_run: bool = False):
     p = await get_pool()
@@ -1287,7 +1621,7 @@ async def run_write_off(dry_run: bool = False):
             async with conn.transaction():
                 # Отримуємо всі незаписані відправки
                 shipments_raw = await conn.fetch("""
-                    SELECT id, article, quantity, is_case
+                    SELECT id, report_date, article, quantity, is_case, COALESCE(finished_main_qty, 0) AS finished_main_qty
                     FROM bot_workshop.daily_shipments
                     WHERE is_written_off = false
                     ORDER BY report_date, id
@@ -1296,29 +1630,38 @@ async def run_write_off(dry_run: bool = False):
                 if not shipments_raw:
                     return {"success": True, "written_off_count": 0, "errors": [], "details": ["Немає записів для списання"]}
 
-                # Агрегуємо по article — складаємо qty для однакових артикулів
-                # is_case беремо від першого запису (однаковий для одного артикулу)
+                # Агрегуємо по (report_date, article) — раніше було тільки по
+                # article, тож catch-up запуск, що покриває кілька pending дат
+                # одразу, змішував їх кількості в один запис без можливості
+                # розділити назад. Тепер кожен (дата, артикул) — окремий рядок
+                # history_logs з власним report_date, для майбутньої ретроактивної
+                # корекції.
                 aggregated = {}
                 for r in shipments_raw:
-                    key = r['article'].strip().upper()
+                    key = (r['report_date'], r['article'].strip().upper())
                     if key not in aggregated:
-                        aggregated[key] = {'article': key, 'quantity': 0, 'is_case': r['is_case']}
+                        aggregated[key] = {
+                            'report_date': r['report_date'],
+                            'article': r['article'].strip().upper(),
+                            'quantity': 0,
+                            'is_case': r['is_case'],
+                            'finished_main_qty': 0,
+                        }
                     aggregated[key]['quantity'] += r['quantity']
+                    aggregated[key]['finished_main_qty'] += r['finished_main_qty']
                 shipments = list(aggregated.values())
 
                 session_id = str(uuid.uuid4())
 
                 for row in shipments:
                     s_id = None
-                    raw_article = row['article'].strip().upper()
                     qty = row['quantity']
                     is_case = row['is_case']
-                    
-                    # Нормалізація артикулу (кирилиця С → латиниця S)
-                    article = raw_article
-                    if len(raw_article) <= 5:  # G12, T1С, G17S — короткі
-                        article = raw_article.replace('С', 'S')
-                    
+
+                    # Нормалізація артикулу (спільна функція, теж використовується
+                    # для override-матчингу finished_main)
+                    article, base_article = _normalize_article(row['article'])
+
                     # 1. Пропускаємо послуги
                     if article in SKIP:
                         details.append(f"Пропущено (послуга): {article}")
@@ -1333,17 +1676,37 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, qty, item_id)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                            VALUES ($1, $2, $2, $3, 'inventory_operative', 'write_off_direct')
-                        """, session_id, article, -qty)
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                            VALUES ($1, $2, $2, $3, 'inventory_operative', 'write_off_direct', $1, $4)
+                        """, session_id, article, -qty, row['report_date'])
                         details.append(f"Списано {qty} з operative: {item_id}")
                         continue
                     
-                    # 3. Визначаємо base_article (без H і T суфіксів, крім T1/T1S)
-                    base_article = article
-                    if not article.startswith('T1'):
-                        base_article = article.replace('H', '').replace('T', '')
-                    
+                    # 3. Ручний override "зі складу" (inventory_finished_main) —
+                    # застосовується ПЕРШИМ, до основного каскаду. Виставляється
+                    # інлайн у ShipmentsLog (тільки Вова/Матей); якщо складу не
+                    # вистачає на момент запуску — залишок автоматично йде в
+                    # незмінений каскад нижче.
+                    if row['finished_main_qty'] > 0:
+                        fm_row = await conn.fetchrow("""
+                            SELECT quantity FROM bot_workshop.inventory_finished_main
+                            WHERE item_id = $1
+                        """, base_article)
+                        fm_available = fm_row['quantity'] if fm_row else 0
+                        from_finished_main = min(row['finished_main_qty'], fm_available, qty)
+                        if from_finished_main > 0:
+                            await conn.execute("""
+                                UPDATE bot_workshop.inventory_finished_main
+                                SET quantity = quantity - $1
+                                WHERE item_id = $2
+                            """, from_finished_main, base_article)
+                            await conn.execute("""
+                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                                VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main', $1, $4)
+                            """, session_id, base_article, -from_finished_main, row['report_date'])
+                            details.append(f"Списано {from_finished_main} зі складу (finished_main): {base_article}")
+                            qty -= from_finished_main
+
                     # A. Перевіряємо inventory_finished
                     finished_row = await conn.fetchrow("""
                         SELECT quantity FROM bot_workshop.inventory_finished
@@ -1359,9 +1722,9 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, from_finished, base_article)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                            VALUES ($1, $2, $2, $3, 'inventory_finished', 'write_off_finished')
-                        """, session_id, base_article, -from_finished)
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                            VALUES ($1, $2, $2, $3, 'inventory_finished', 'write_off_finished', $1, $4)
+                        """, session_id, base_article, -from_finished, row['report_date'])
                         details.append(f"Списано {from_finished} з finished: {base_article}")
 
                     remaining = qty - from_finished
@@ -1398,13 +1761,13 @@ async def run_write_off(dry_run: bool = False):
                                     WHERE item_id = $2
                                 """, ing['quantity'] * remaining, component)
                                 await conn.execute("""
-                                    INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                    VALUES ($1, $2, $3, $4, $5, 'write_off_component')
-                                """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
+                                    INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                                    VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6)
+                                """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
                             await conn.execute("""
-                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                VALUES ($1, $2, $3, $4, 'inventory_cases', 'write_off_case')
-                            """, session_id, base_article, article, -remaining)
+                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                                VALUES ($1, $2, $3, $4, 'inventory_cases', 'write_off_case', $1, $5)
+                            """, session_id, base_article, article, -remaining, row['report_date'])
                             details.append(f"Списано {remaining} кейсів {article} (cases+operative)")
                         else:
                             # C. Не кейс: recipes → inventory_operative
@@ -1432,9 +1795,9 @@ async def run_write_off(dry_run: bool = False):
                                         WHERE item_id = $2
                                     """, ing['quantity'] * remaining, component)
                                     await conn.execute("""
-                                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                        VALUES ($1, $2, $3, $4, $5, 'write_off_component')
-                                    """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
+                                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                                        VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6)
+                                    """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
                                 details.append(f"Списано {remaining} x {base_article} (гриль)")
                             else:
                                 # D. Ящик: recipes_lootbox → loot_box_operative або inventory_operative
@@ -1462,9 +1825,9 @@ async def run_write_off(dry_run: bool = False):
                                             WHERE item_id = $2
                                         """, ing['quantity'] * remaining, component)
                                         await conn.execute("""
-                                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
-                                            VALUES ($1, $2, $3, $4, $5, 'write_off_box')
-                                        """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log)
+                                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
+                                            VALUES ($1, $2, $3, $4, $5, 'write_off_box', $1, $6)
+                                        """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
                                     details.append(f"Списано {remaining} x {base_article} (ящик)")
                                 else:
                                     errors.append(f"Рецепт не знайдено: {base_article}")
@@ -1489,11 +1852,17 @@ async def run_write_off(dry_run: bool = False):
     return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}
 
 
-async def _resolve_wholesale_components(conn, article: str, qty: float) -> list:
+async def _resolve_wholesale_components(conn, article: str, qty: float, skip_finished: bool = False) -> list:
     """
     Розкладає позицію опт-замовлення на резерви по джерелах — та сама каскадна
     логіка, що й run_write_off (finished → cases+recipe / recipe / recipes_lootbox),
     але без жодного фізичного UPDATE.
+
+    skip_finished=True — пропускає резервування з готового (inventory_finished),
+    але каскад "кейс-шел (inventory_cases) → рецепт" лишається активним
+    (використовується для розподілу "з нуля" в адмінському /wholesale/{id}/source —
+    там finished вже явно виділено окремим from_master, а "з нуля" означає
+    "не з повністю готового грилю", але порожні кейс-шели все ще валідне джерело).
     """
     SKIP = {'ГРАВІЮВАННЯ ШАМПУРІВ', 'ЧОХОЛ'}
     DIRECT_OPERATIVE = {
@@ -1520,14 +1889,16 @@ async def _resolve_wholesale_components(conn, article: str, qty: float) -> list:
     if not norm_article.startswith('T1'):
         base_article = norm_article.replace('H', '').replace('T', '')
 
-    finished_row = await conn.fetchrow(
-        "SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", base_article
-    )
-    finished_qty = finished_row['quantity'] if finished_row else 0
-    from_finished = min(finished_qty, qty)
+    from_finished = 0
+    if not skip_finished:
+        finished_row = await conn.fetchrow(
+            "SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", base_article
+        )
+        finished_qty = finished_row['quantity'] if finished_row else 0
+        from_finished = min(finished_qty, qty)
 
-    if from_finished > 0:
-        result.append({'source_table': 'finished', 'item_id': base_article, 'qty': from_finished})
+        if from_finished > 0:
+            result.append({'source_table': 'finished', 'item_id': base_article, 'qty': from_finished})
 
     remaining = qty - from_finished
     if remaining <= 0:
@@ -1592,9 +1963,9 @@ async def wholesale_reserve(body: WholesaleReserveBody):
                     for comp in components:
                         await conn.execute("""
                             INSERT INTO bot_workshop.wholesale_reservations
-                                (wholesale_order_id, source_table, item_id, reserved_qty)
-                            VALUES ($1, $2, $3, $4)
-                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'])
+                                (wholesale_order_id, source_table, item_id, reserved_qty, article)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'], item.article)
 
         return {"status": "reserved", "id": order_id}
     except ValueError as e:
@@ -1637,6 +2008,11 @@ async def wholesale_writeoff(wholesale_order_id: int):
                     if source_table == 'finished':
                         await conn.execute(
                             "UPDATE bot_workshop.inventory_finished SET quantity = quantity - $1 WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'finished_main':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_finished_main SET quantity = quantity - $1 WHERE item_id = $2",
                             qty, item_id
                         )
                     elif source_table == 'cases':
@@ -1694,6 +2070,367 @@ async def wholesale_writeoff(wholesale_order_id: int):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"Error in POST /api/wholesale/writeoff/{wholesale_order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/wholesale/{wholesale_order_id}/source")
+async def set_wholesale_source(wholesale_order_id: int, body: WholesaleSourceBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow("""
+                    SELECT id, items, status FROM bot_workshop.wholesale_orders WHERE id = $1
+                """, wholesale_order_id)
+                if not order:
+                    raise HTTPException(status_code=404, detail="Опт-замовлення не знайдено")
+                if order['status'] == 'written_off':
+                    raise HTTPException(status_code=400, detail="Замовлення вже списано")
+
+                items = json.loads(order['items'])
+                line = next((it for it in items if it.get('article') == body.article), None)
+                if not line:
+                    raise HTTPException(status_code=404, detail=f"Позицію {body.article} не знайдено в замовленні")
+                qty = float(line['quantity'])
+
+                total = body.from_master + body.from_warehouse + body.from_scratch
+                if abs(total - qty) > 0.001:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Сума джерел ({total}) не дорівнює кількості позиції ({qty})"
+                    )
+
+                if body.from_master > 0:
+                    finished_row = await conn.fetchrow(
+                        "SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", body.article
+                    )
+                    available = finished_row['quantity'] if finished_row else 0
+                    if body.from_master > available:
+                        raise HTTPException(
+                            status_code=400, detail=f"З майстерні перевищує наявність ({available})"
+                        )
+
+                if body.from_warehouse > 0:
+                    main_row = await conn.fetchrow(
+                        "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.article
+                    )
+                    available = main_row['quantity'] if main_row else 0
+                    if body.from_warehouse > available:
+                        raise HTTPException(
+                            status_code=400, detail=f"Зі складу перевищує наявність ({available})"
+                        )
+
+                if len(items) == 1:
+                    # Єдина позиція в замовленні — усі резерви (навіть старі,
+                    # без article, з часів до міграції) однозначно належать їй.
+                    await conn.execute(
+                        "DELETE FROM bot_workshop.wholesale_reservations WHERE wholesale_order_id = $1",
+                        wholesale_order_id
+                    )
+                else:
+                    has_legacy = await conn.fetchval("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM bot_workshop.wholesale_reservations
+                            WHERE wholesale_order_id = $1 AND article IS NULL
+                        )
+                    """, wholesale_order_id)
+                    if has_legacy:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Замовлення має старі резерви без прив'язки до article (кілька позицій у замовленні) — потрібна ручна звірка перед розподілом джерел"
+                        )
+                    await conn.execute(
+                        "DELETE FROM bot_workshop.wholesale_reservations WHERE wholesale_order_id = $1 AND article = $2",
+                        wholesale_order_id, body.article
+                    )
+
+                if body.from_master > 0:
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.wholesale_reservations
+                            (wholesale_order_id, source_table, item_id, reserved_qty, article)
+                        VALUES ($1, 'finished', $2, $3, $2)
+                    """, wholesale_order_id, body.article, body.from_master)
+
+                if body.from_warehouse > 0:
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.wholesale_reservations
+                            (wholesale_order_id, source_table, item_id, reserved_qty, article)
+                        VALUES ($1, 'finished_main', $2, $3, $2)
+                    """, wholesale_order_id, body.article, body.from_warehouse)
+
+                if body.from_scratch > 0:
+                    components = await _resolve_wholesale_components(
+                        conn, body.article, body.from_scratch, skip_finished=True
+                    )
+                    for comp in components:
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.wholesale_reservations
+                                (wholesale_order_id, source_table, item_id, reserved_qty, article)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, wholesale_order_id, comp['source_table'], comp['item_id'], comp['qty'], body.article)
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in POST /api/admin/wholesale/{wholesale_order_id}/source: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/wholesale-overview")
+async def get_wholesale_overview():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT
+                wr.item_id,
+                SUM(wr.reserved_qty) AS reserved,
+                COALESCE(m.quantity, 0) + COALESCE(o.quantity, 0) AS available
+            FROM bot_workshop.wholesale_reservations wr
+            JOIN bot_workshop.wholesale_orders wo ON wo.id = wr.wholesale_order_id
+            LEFT JOIN bot_workshop.inventory_main m ON m.item_id = wr.item_id
+            LEFT JOIN bot_workshop.inventory_operative o ON o.item_id = wr.item_id
+            WHERE wo.status != 'written_off' AND wr.source_table IN ('main', 'operative')
+            GROUP BY wr.item_id, m.quantity, o.quantity
+            ORDER BY wr.item_id
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/wholesale/items")
+async def get_wholesale_items():
+    p = await get_pool()
+    try:
+        orders = await p.fetch("""
+            SELECT id, items FROM bot_workshop.wholesale_orders WHERE status != 'written_off'
+        """)
+        reservations = await p.fetch("""
+            SELECT wholesale_order_id, source_table, item_id, reserved_qty, article
+            FROM bot_workshop.wholesale_reservations
+            WHERE article IS NOT NULL
+        """)
+
+        result = []
+        for order in orders:
+            order_id = order['id']
+            items = json.loads(order['items'])
+            order_reservations = [r for r in reservations if r['wholesale_order_id'] == order_id]
+
+            for it in items:
+                article = it['article']
+                qty = float(it['quantity'])
+                article_rows = [r for r in order_reservations if r['article'] == article]
+                from_master = sum(float(r['reserved_qty']) for r in article_rows if r['source_table'] == 'finished')
+                from_warehouse = sum(float(r['reserved_qty']) for r in article_rows if r['source_table'] == 'finished_main')
+                has_split = len(article_rows) > 0
+                # from_scratch — це кількість ОДИНИЦЬ АРТИКУЛУ, а не сума
+                # компонентних резервів (ті множаться на рецепт, напр. Шампур×6),
+                # тому це завжди арифметика від qty, а не сума рядків резервів.
+                from_scratch = qty - from_master - from_warehouse if has_split else qty
+
+                result.append({
+                    "order_id": order_id,
+                    "article": article,
+                    "qty": qty,
+                    "from_master": from_master,
+                    "from_warehouse": from_warehouse,
+                    "from_scratch": from_scratch,
+                })
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/master/wholesale")
+async def get_master_wholesale():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT it.article, SUM(it.quantity) AS qty
+            FROM bot_workshop.wholesale_orders wo,
+                 LATERAL jsonb_to_recordset(wo.items) AS it(article text, quantity numeric)
+            WHERE wo.status != 'written_off'
+            GROUP BY it.article
+            ORDER BY it.article
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pickup/reserve")
+async def pickup_reserve(body: PickupReserveBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                items_json = json.dumps([item.dict() for item in body.items])
+                order_row = await conn.fetchrow("""
+                    INSERT INTO bot_workshop.pickup_orders
+                        (source, source_order_id, client_name, phone, items, status, reserved_at)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, 'reserved', CURRENT_TIMESTAMP)
+                    ON CONFLICT (source, source_order_id) DO NOTHING
+                    RETURNING id
+                """, body.source, body.source_order_id, body.client_name, body.phone, items_json)
+
+                if not order_row:
+                    existing_id = await conn.fetchval("""
+                        SELECT id FROM bot_workshop.pickup_orders
+                        WHERE source = $1 AND source_order_id = $2
+                    """, body.source, body.source_order_id)
+                    return {"id": existing_id}
+
+                order_id = order_row['id']
+
+                for item in body.items:
+                    components = await _resolve_wholesale_components(conn, item.article, item.quantity)
+                    for comp in components:
+                        await conn.execute("""
+                            INSERT INTO bot_workshop.pickup_reservations
+                                (pickup_order_id, source_table, item_id, reserved_qty)
+                            VALUES ($1, $2, $3, $4)
+                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'])
+
+        return {"id": order_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in POST /api/pickup/reserve: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pickup/writeoff/{pickup_order_id}")
+async def pickup_writeoff(pickup_order_id: int):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow("""
+                    SELECT id, source, source_order_id, status
+                    FROM bot_workshop.pickup_orders WHERE id = $1
+                """, pickup_order_id)
+                if not order:
+                    raise HTTPException(status_code=404, detail="Самовивіз-замовлення не знайдено")
+
+                if order['status'] == 'written_off':
+                    return {"status": "already_written_off", "id": pickup_order_id}
+
+                reservations = await conn.fetch("""
+                    SELECT source_table, item_id, reserved_qty
+                    FROM bot_workshop.pickup_reservations
+                    WHERE pickup_order_id = $1
+                """, pickup_order_id)
+
+                session_id = str(uuid.uuid4())
+                article_ref = f"{order['source']}:{order['source_order_id']}"
+
+                for r in reservations:
+                    source_table = r['source_table']
+                    item_id = r['item_id']
+                    qty = r['reserved_qty']
+
+                    if source_table == 'finished':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_finished SET quantity = quantity - $1 WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'cases':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_cases SET quantity = quantity - $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'main':
+                        await conn.execute(
+                            "UPDATE bot_workshop.inventory_main SET quantity = quantity - $1, last_update = CURRENT_TIMESTAMP WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'components':
+                        await conn.execute(
+                            "UPDATE bot_workshop.cases_components SET quantity = quantity - $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2::int",
+                            qty, item_id
+                        )
+                    elif source_table == 'operative':
+                        loot_row = await conn.fetchrow(
+                            "SELECT item_id FROM bot_workshop.loot_box_operative WHERE item_id = $1", item_id
+                        )
+                        if loot_row:
+                            await conn.execute(
+                                "UPDATE bot_workshop.loot_box_operative SET quantity = quantity - $1 WHERE item_id = $2",
+                                qty, item_id
+                            )
+                        else:
+                            await conn.execute(
+                                "UPDATE bot_workshop.inventory_operative SET quantity = quantity - $1 WHERE item_id = $2",
+                                qty, item_id
+                            )
+                    else:
+                        raise ValueError(f"Невідома source_table в резерві: {source_table}")
+
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation)
+                        VALUES ($1, $2, $3, $4, 'pickup', 'write_off')
+                    """, session_id, article_ref, item_id, -qty)
+
+                await conn.execute("""
+                    UPDATE bot_workshop.pickup_orders
+                    SET status = 'written_off', written_off_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                """, pickup_order_id)
+
+                await conn.execute(
+                    "DELETE FROM bot_workshop.pickup_reservations WHERE pickup_order_id = $1",
+                    pickup_order_id
+                )
+
+        return {"status": "written_off", "id": pickup_order_id, "items_written_off": len(reservations)}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in POST /api/pickup/writeoff/{pickup_order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pickup/release/{pickup_order_id}")
+async def pickup_release(pickup_order_id: int):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow("""
+                    SELECT id, status FROM bot_workshop.pickup_orders WHERE id = $1
+                """, pickup_order_id)
+                if not order:
+                    raise HTTPException(status_code=404, detail="Самовивіз-замовлення не знайдено")
+
+                if order['status'] == 'written_off':
+                    raise HTTPException(status_code=400, detail="Замовлення вже списано, звільнення неможливе")
+
+                if order['status'] == 'released':
+                    return {"status": "already_released", "id": pickup_order_id}
+
+                await conn.execute(
+                    "DELETE FROM bot_workshop.pickup_reservations WHERE pickup_order_id = $1",
+                    pickup_order_id
+                )
+
+                await conn.execute("""
+                    UPDATE bot_workshop.pickup_orders
+                    SET status = 'released', released_at = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                """, pickup_order_id)
+
+        return {"status": "released", "id": pickup_order_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/pickup/release/{pickup_order_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
