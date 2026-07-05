@@ -36,6 +36,8 @@ type DayItem = {
   finished_main_qty: number
   finished_main_available: number
   is_written_off: boolean
+  retroactive_total_qty: number
+  retroactive_corrected_qty: number
 }
 
 type DayData = {
@@ -75,6 +77,8 @@ function getGroupedShipments(shipments: Shipment[]): Record<string, DayData> {
       finished_main_qty: s.finished_main_qty ?? 0,
       finished_main_available: s.finished_main_available ?? 0,
       is_written_off: s.is_written_off ?? false,
+      retroactive_total_qty: s.retroactive_total_qty ?? 0,
+      retroactive_corrected_qty: s.retroactive_corrected_qty ?? 0,
     })
 
     // Total — не рахуємо Ящик і Бар (як в n8n totalCount)
@@ -102,10 +106,17 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
   const flashTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   // Ретроактивна корекція (вже списані лінії) — окремий стан від живого
-  // тоглу вище, щоб два потоки не змішувались.
+  // тоглу вище, щоб два потоки не змішувались. Той самий сегментований
+  // Авто|Зі складу контрол перемикається між обома в JSX залежно від
+  // item.is_written_off.
   const [retroOpen, setRetroOpen] = useState<Record<string, boolean>>({})
   const [retroValues, setRetroValues] = useState<Record<string, number>>({})
   const [retroStatus, setRetroStatus] = useState<Record<string, 'idle' | 'saving' | 'done' | 'error'>>({})
+  // Локальний оверлей поверх retroactive_corrected_qty з сервера — щоб UI
+  // одразу відображав щойно додану корекцію, не чекаючи рефетчу shipments
+  // від батька (той самий патерн, що й localValues для живого тоглу).
+  const [localRetroExtra, setLocalRetroExtra] = useState<Record<string, number>>({})
+  const retroFlashTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
 
   const nonWholesale = shipments.filter(s => !s.is_wholesale)
   const groupedShipments = getGroupedShipments(nonWholesale)
@@ -137,7 +148,13 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
     setRetroStatus(prev => ({ ...prev, [key]: 'saving' }))
     try {
       await api.setShipmentRetroactiveSource({ report_date: date, article, finished_main_qty: value, tid: user.tid })
+      setLocalRetroExtra(prev => ({ ...prev, [key]: (prev[key] ?? 0) + value }))
+      setRetroValues(prev => ({ ...prev, [key]: 0 }))
       setRetroStatus(prev => ({ ...prev, [key]: 'done' }))
+      if (retroFlashTimers.current[key]) clearTimeout(retroFlashTimers.current[key])
+      retroFlashTimers.current[key] = setTimeout(() => {
+        setRetroStatus(prev => ({ ...prev, [key]: 'idle' }))
+      }, 1500)
     } catch (e) {
       setRetroStatus(prev => ({ ...prev, [key]: 'error' }))
       alert(`Помилка ретроактивної корекції для ${article}: ${e instanceof Error ? e.message : ''}`)
@@ -214,8 +231,20 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
 
                                 const overrideKey = `${date}:${item.article}`
                                 const maxOverride = Math.min(item.quantity, item.finished_main_available)
-                                const isOverrideActive = overrideOpen[overrideKey] ?? item.finished_main_qty > 0
                                 const overrideValue = localValues[overrideKey] ?? item.finished_main_qty
+
+                                // Ретроактивний режим — лінія вже повністю списана. Той самий
+                                // сегментований тогл нижче перемикається на цю гілку замість
+                                // живого PATCH (він би повернув 404 — рядки вже is_written_off).
+                                const isRetroMode = item.is_written_off
+                                const retroCorrected = item.retroactive_corrected_qty + (localRetroExtra[overrideKey] ?? 0)
+                                const retroRemaining = Math.max(0, item.retroactive_total_qty - retroCorrected)
+                                const retroMaxAdd = Math.min(retroRemaining, item.finished_main_available)
+                                const retroFullyDone = retroRemaining <= 0
+
+                                const isOverrideActive = isRetroMode
+                                  ? (retroOpen[overrideKey] ?? retroCorrected > 0)
+                                  : (overrideOpen[overrideKey] ?? item.finished_main_qty > 0)
 
                                 return (
                                   <li key={idx} className="flex items-baseline gap-1.5 font-mono text-[13px] flex-wrap">
@@ -226,14 +255,18 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                     {extrasStr && (
                                       <span className="text-white/50 text-[11px]">{extrasStr}</span>
                                     )}
-                                    {canOverrideSource && (
-                                      <span className="flex items-center gap-1 ml-auto">
+                                    {canOverrideSource && (!isRetroMode || daysSince(date) <= 7) && (
+                                      <span className="flex items-center gap-1 ml-auto flex-wrap">
                                         <span className="flex rounded border border-white/10 overflow-hidden">
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              setOverrideOpen(prev => ({ ...prev, [overrideKey]: false }))
-                                              applySource(date, item.article, 0)
+                                              if (isRetroMode) {
+                                                setRetroOpen(prev => ({ ...prev, [overrideKey]: false }))
+                                              } else {
+                                                setOverrideOpen(prev => ({ ...prev, [overrideKey]: false }))
+                                                applySource(date, item.article, 0)
+                                              }
                                             }}
                                             className={`text-[10px] px-1.5 py-0.5 transition-colors ${
                                               !isOverrideActive
@@ -245,7 +278,13 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                           </button>
                                           <button
                                             type="button"
-                                            onClick={() => setOverrideOpen(prev => ({ ...prev, [overrideKey]: true }))}
+                                            onClick={() => {
+                                              if (isRetroMode) {
+                                                setRetroOpen(prev => ({ ...prev, [overrideKey]: true }))
+                                              } else {
+                                                setOverrideOpen(prev => ({ ...prev, [overrideKey]: true }))
+                                              }
+                                            }}
                                             className={`text-[10px] px-1.5 py-0.5 border-l border-white/10 transition-colors ${
                                               isOverrideActive
                                                 ? 'bg-[#c9963a]/20 text-[#c9963a]'
@@ -255,7 +294,8 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                             Зі складу
                                           </button>
                                         </span>
-                                        {isOverrideActive && (
+
+                                        {!isRetroMode && isOverrideActive && (
                                           <input
                                             type="number"
                                             min={0}
@@ -269,45 +309,47 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                             className="w-14 bg-white/5 border border-white/10 rounded px-1 text-[12px] text-white"
                                           />
                                         )}
-                                        <span
-                                          className={`text-[10px] text-emerald-400 transition-opacity duration-700 ${
-                                            savedFlash[overrideKey] ? 'opacity-100' : 'opacity-0'
-                                          }`}
-                                        >
-                                          ✓ Збережено
-                                        </span>
-                                      </span>
-                                    )}
-                                    {canOverrideSource && item.is_written_off && daysSince(date) <= 7 && (
-                                      <span className="flex items-center gap-1 ml-2 pl-2 border-l border-white/10">
-                                        {!retroOpen[overrideKey] ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => setRetroOpen(prev => ({ ...prev, [overrideKey]: true }))}
-                                            className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-500/10 border-sky-500/30 text-sky-300"
+                                        {!isRetroMode && (
+                                          <span
+                                            className={`text-[10px] text-emerald-400 transition-opacity duration-700 ${
+                                              savedFlash[overrideKey] ? 'opacity-100' : 'opacity-0'
+                                            }`}
                                           >
-                                            Виправити заднім числом
-                                          </button>
-                                        ) : (
+                                            ✓ Збережено
+                                          </span>
+                                        )}
+
+                                        {isRetroMode && isOverrideActive && (
                                           <>
-                                            <input
-                                              type="number"
-                                              min={0}
-                                              value={retroValues[overrideKey] ?? 0}
-                                              onChange={(e) => {
-                                                const raw = Math.max(0, Number(e.target.value))
-                                                setRetroValues(prev => ({ ...prev, [overrideKey]: raw }))
-                                              }}
-                                              className="w-14 bg-white/5 border border-sky-500/30 rounded px-1 text-[12px] text-white"
-                                            />
-                                            <button
-                                              type="button"
-                                              disabled={retroStatus[overrideKey] === 'saving'}
-                                              onClick={() => submitRetroactive(date, item.article)}
-                                              className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-500/20 border-sky-500/40 text-sky-300 disabled:opacity-50"
-                                            >
-                                              {retroStatus[overrideKey] === 'saving' ? '...' : 'OK'}
-                                            </button>
+                                            <span className="text-[10px] text-white/40">
+                                              Скориговано: {retroCorrected} / {item.retroactive_total_qty}
+                                              {retroFullyDone && ' ✓'}
+                                            </span>
+                                            {!retroFullyDone && (
+                                              <>
+                                                <input
+                                                  type="number"
+                                                  min={0}
+                                                  max={retroMaxAdd}
+                                                  placeholder="+"
+                                                  value={retroValues[overrideKey] || ''}
+                                                  onChange={(e) => {
+                                                    const raw = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value))
+                                                    const clamped = Math.min(raw, retroMaxAdd)
+                                                    setRetroValues(prev => ({ ...prev, [overrideKey]: clamped }))
+                                                  }}
+                                                  className="w-14 bg-white/5 border border-sky-500/30 rounded px-1 text-[12px] text-white"
+                                                />
+                                                <button
+                                                  type="button"
+                                                  disabled={retroStatus[overrideKey] === 'saving' || !(retroValues[overrideKey] > 0)}
+                                                  onClick={() => submitRetroactive(date, item.article)}
+                                                  className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-500/20 border-sky-500/40 text-sky-300 disabled:opacity-50"
+                                                >
+                                                  {retroStatus[overrideKey] === 'saving' ? '...' : 'OK'}
+                                                </button>
+                                              </>
+                                            )}
                                             {retroStatus[overrideKey] === 'done' && (
                                               <span className="text-[10px] text-emerald-400">✓ виправлено</span>
                                             )}

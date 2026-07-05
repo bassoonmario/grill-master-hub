@@ -390,13 +390,32 @@ async def _fetch_shipments(conn) -> list:
     # is_written_off — за (report_date, base_article): True лише якщо існує
     # хоч один daily_shipments рядок для цього ключа І всі такі рядки вже
     # списані. Потрібно фронтенду, щоб показувати ретроактивний контроль
-    # тільки для вже списаних позицій (а не для ще pending).
-    ds_rows = await conn.fetch("SELECT report_date, article, is_written_off FROM bot_workshop.daily_shipments")
+    # тільки для вже списаних позицій (а не для ще pending). total_qty_map —
+    # сума quantity по всіх рядках ключа, той самий total_qty, що й у
+    # /retroactive-source, потрібен фронтенду для відображення "X / Y".
+    ds_rows = await conn.fetch("SELECT report_date, article, quantity, is_written_off FROM bot_workshop.daily_shipments")
     written_off_map = {}
+    total_qty_map = {}
     for r in ds_rows:
         _, base = _normalize_article(r['article'])
         key = (r['report_date'], base)
         written_off_map[key] = written_off_map.get(key, True) and r['is_written_off']
+        total_qty_map[key] = total_qty_map.get(key, 0) + r['quantity']
+
+    # Скільки вже було ретроактивно скориговано раніше — те саме, що рахує
+    # /retroactive-source перед кожним викликом (див. already_corrected там),
+    # тут потрібно фронтенду для відображення "Скориговано: X / Y".
+    retro_rows = await conn.fetch("""
+        SELECT report_date, article, COALESCE(SUM(-qty), 0) AS corrected
+        FROM bot_workshop.history_logs
+        WHERE operation = 'write_off_finished_main_retroactive'
+        GROUP BY report_date, article
+    """)
+    retro_map = {}
+    for r in retro_rows:
+        _, base = _normalize_article(r['article'])
+        key = (r['report_date'], base)
+        retro_map[key] = retro_map.get(key, 0) + r['corrected']
 
     result = []
     for r in rows:
@@ -406,6 +425,8 @@ async def _fetch_shipments(conn) -> list:
         d['finished_main_qty'] = override_map.get(key, 0)
         d['finished_main_available'] = fm_stock.get(base_article, 0)
         d['is_written_off'] = written_off_map.get(key, False)
+        d['retroactive_total_qty'] = total_qty_map.get(key, 0)
+        d['retroactive_corrected_qty'] = retro_map.get(key, 0)
         result.append(d)
     return result
 

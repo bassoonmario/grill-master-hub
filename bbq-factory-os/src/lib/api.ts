@@ -140,6 +140,8 @@ export interface Shipment {
   finished_main_qty: number
   finished_main_available: number
   is_written_off: boolean
+  retroactive_total_qty: number
+  retroactive_corrected_qty: number
 }
 
 export interface ShipmentSourceBody {
