@@ -179,12 +179,14 @@ class WholesaleSourceBody(BaseModel):
 class ShipmentSourceBody(BaseModel):
     report_date: date
     article: str
+    category: str
     finished_main_qty: int
     tid: int
 
 class RetroactiveSourceBody(BaseModel):
     report_date: date
     article: str
+    category: str
     finished_main_qty: int
     tid: int
 
@@ -387,34 +389,45 @@ async def _fetch_shipments(conn) -> list:
 
     # finished_main override — daily_shipments і shipment_lists різні таблиці
     # без FK (shipment_lists будується зовнішнім процесом з агрегацією/extras-
-    # згортанням), тож зіставляємо по (report_date, нормалізований article),
-    # тією ж _normalize_article, що й run_write_off.
+    # згортанням), тож зіставляємо по (report_date, нормалізований article,
+    # category), тією ж _normalize_article, що й run_write_off. category на
+    # daily_shipments — NULL для рядків, записаних до впровадження цієї
+    # колонки зовнішнім процесом (n8n) — такі рядки свідомо виключені з усіх
+    # override-мап нижче (WHERE category IS NOT NULL): без category
+    # неможливо надійно визначити, якій з двох ліній (Звичайні/Гравіювання)
+    # на ту саму (дата, артикул) вони належать, і вгадувати не можна.
     pending = await conn.fetch("""
-        SELECT report_date, article, COALESCE(finished_main_qty, 0) AS finished_main_qty
+        SELECT report_date, article, category, COALESCE(finished_main_qty, 0) AS finished_main_qty
         FROM bot_workshop.daily_shipments
         WHERE is_written_off = false AND COALESCE(finished_main_qty, 0) > 0
+          AND category IS NOT NULL
     """)
     override_map = {}
     for r in pending:
         _, base_article = _normalize_article(r['article'])
-        key = (r['report_date'], base_article)
+        key = (r['report_date'], base_article, r['category'])
         override_map[key] = override_map.get(key, 0) + r['finished_main_qty']
 
-    fm_stock_rows = await conn.fetch("SELECT item_id, quantity FROM bot_workshop.inventory_finished_main")
-    fm_stock = {r['item_id'].strip().upper(): r['quantity'] for r in fm_stock_rows}
+    fm_stock_rows = await conn.fetch("SELECT item_id, quantity, is_engraved FROM bot_workshop.inventory_finished_main")
+    fm_stock = {(r['item_id'].strip().upper(), r['is_engraved']): r['quantity'] for r in fm_stock_rows}
 
-    # is_written_off — за (report_date, base_article): True лише якщо існує
-    # хоч один daily_shipments рядок для цього ключа І всі такі рядки вже
-    # списані. Потрібно фронтенду, щоб показувати ретроактивний контроль
-    # тільки для вже списаних позицій (а не для ще pending). total_qty_map —
-    # сума quantity по всіх рядках ключа, той самий total_qty, що й у
-    # /retroactive-source, потрібен фронтенду для відображення "X / Y".
-    ds_rows = await conn.fetch("SELECT report_date, article, quantity, is_written_off FROM bot_workshop.daily_shipments")
+    # is_written_off — за (report_date, base_article, category): True лише
+    # якщо існує хоч один daily_shipments рядок для цього ключа І всі такі
+    # рядки вже списані. Потрібно фронтенду, щоб показувати ретроактивний
+    # контроль тільки для вже списаних позицій (а не для ще pending).
+    # total_qty_map — сума quantity по всіх рядках ключа, той самий
+    # total_qty, що й у /retroactive-source, потрібен фронтенду для
+    # відображення "X / Y".
+    ds_rows = await conn.fetch("""
+        SELECT report_date, article, category, quantity, is_written_off
+        FROM bot_workshop.daily_shipments
+        WHERE category IS NOT NULL
+    """)
     written_off_map = {}
     total_qty_map = {}
     for r in ds_rows:
         _, base = _normalize_article(r['article'])
-        key = (r['report_date'], base)
+        key = (r['report_date'], base, r['category'])
         written_off_map[key] = written_off_map.get(key, True) and r['is_written_off']
         total_qty_map[key] = total_qty_map.get(key, 0) + r['quantity']
 
@@ -422,24 +435,25 @@ async def _fetch_shipments(conn) -> list:
     # /retroactive-source перед кожним викликом (див. already_corrected там),
     # тут потрібно фронтенду для відображення "Скориговано: X / Y".
     retro_rows = await conn.fetch("""
-        SELECT report_date, article, COALESCE(SUM(-qty), 0) AS corrected
+        SELECT report_date, article, category, COALESCE(SUM(-qty), 0) AS corrected
         FROM bot_workshop.history_logs
-        WHERE operation = 'write_off_finished_main_retroactive'
-        GROUP BY report_date, article
+        WHERE operation = 'write_off_finished_main_retroactive' AND category IS NOT NULL
+        GROUP BY report_date, article, category
     """)
     retro_map = {}
     for r in retro_rows:
         _, base = _normalize_article(r['article'])
-        key = (r['report_date'], base)
+        key = (r['report_date'], base, r['category'])
         retro_map[key] = retro_map.get(key, 0) + r['corrected']
 
     result = []
     for r in rows:
         d = dict(r)
         _, base_article = _normalize_article(d['article'])
-        key = (d['report_date'], base_article)
+        key = (d['report_date'], base_article, d['category'])
+        is_engraved = _resolve_is_engraved(d['category'])
         d['finished_main_qty'] = override_map.get(key, 0)
-        d['finished_main_available'] = fm_stock.get(base_article, 0)
+        d['finished_main_available'] = fm_stock.get((base_article, is_engraved), 0)
         d['is_written_off'] = written_off_map.get(key, False)
         d['retroactive_total_qty'] = total_qty_map.get(key, 0)
         d['retroactive_corrected_qty'] = retro_map.get(key, 0)
@@ -488,17 +502,25 @@ async def set_shipment_source(body: ShipmentSourceBody):
                 if body.finished_main_qty < 0:
                     raise HTTPException(status_code=400, detail="Кількість не може бути від'ємною")
 
+                is_engraved = _resolve_is_engraved(body.category)
                 fm_row = await conn.fetchrow(
-                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", base_article
+                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1 AND is_engraved = $2",
+                    base_article, is_engraved
                 )
                 fm_available = fm_row['quantity'] if fm_row else 0
                 if body.finished_main_qty > fm_available:
                     raise HTTPException(status_code=400, detail=f"Перевищує наявність на складі ({fm_available})")
 
+                # category = $2 (точний збіг, не is_engraved-пул) — щоб дві
+                # лінії shipment_lists на той самий (дата, артикул) з різними
+                # category (Звичайні/Гравіювання) не ділили один і той самий
+                # набір daily_shipments рядків. Рядки з category IS NULL
+                # (легасі, до впровадження колонки зовнішнім процесом)
+                # природньо виключені — NULL ніколи не дорівнює body.category.
                 rows = await conn.fetch("""
                     SELECT id, article, quantity FROM bot_workshop.daily_shipments
-                    WHERE report_date = $1 AND is_written_off = false
-                """, body.report_date)
+                    WHERE report_date = $1 AND is_written_off = false AND category = $2
+                """, body.report_date, body.category)
 
                 matching = []
                 for r in rows:
@@ -570,10 +592,15 @@ async def set_shipment_retroactive_source(body: RetroactiveSourceBody):
             async with conn.transaction():
                 _, base_article = _normalize_article(body.article)
 
+                # category = body.category (точний збіг) — той самий принцип,
+                # що й у живому PATCH-контролі: не дозволяємо двом лініям
+                # shipment_lists (Звичайні/Гравіювання) на той самий (дата,
+                # артикул) ділити один набір daily_shipments рядків. Рядки з
+                # category IS NULL (легасі) природньо виключені.
                 rows = await conn.fetch("""
                     SELECT id, article, quantity, is_written_off FROM bot_workshop.daily_shipments
-                    WHERE report_date = $1
-                """, body.report_date)
+                    WHERE report_date = $1 AND category = $2
+                """, body.report_date, body.category)
                 matching = [r for r in rows if _normalize_article(r['article'])[1] == base_article]
 
                 if not matching:
@@ -595,33 +622,38 @@ async def set_shipment_retroactive_source(body: RetroactiveSourceBody):
                 # не TRUE) — write_off_session_id IS NOT NULL додано як
                 # явна другорядна перевірка (в поточному коді вони завжди
                 # ставляться разом, в одному INSERT).
+                # category = $3 — той самий принцип: history_logs, записані
+                # run_write_off ДО впровадження category (NULL), або для
+                # іншої category-лінії на той самий (дата, артикул), сюди не
+                # потраплять.
                 hist_rows = await conn.fetch(f"""
                     SELECT id, component, qty, source, operation, write_off_session_id
                     FROM bot_workshop.history_logs
-                    WHERE article = $1 AND report_date = $2
+                    WHERE article = $1 AND report_date = $2 AND category = $3
                       AND write_off_session_id IS NOT NULL
-                      AND operation = ANY($3::text[])
-                """, base_article, body.report_date, list(CASCADE_WRITE_OFF_OPERATIONS))
+                      AND operation = ANY($4::text[])
+                """, base_article, body.report_date, body.category, list(CASCADE_WRITE_OFF_OPERATIONS))
 
                 if not hist_rows:
                     raise HTTPException(
                         status_code=409,
                         detail=(
                             "Це списання відбулось до впровадження відстеження по датах "
-                            "(write_off_session_id/report_date відсутні в history_logs) — "
-                            "неможливо безпечно визначити, що саме було списано. "
-                            "Ретроактивна корекція для цього запису недоступна."
+                            "або по категорії (write_off_session_id/report_date/category "
+                            "відсутні в history_logs) — неможливо безпечно визначити, що "
+                            "саме було списано. Ретроактивна корекція для цього запису "
+                            "недоступна."
                         )
                     )
 
                 # Скільки вже було ретроактивно скориговано раніше для цього
-                # (report_date, article) — щоб повторні виклики не відкочували
-                # більше, ніж було фактично списано.
+                # (report_date, article, category) — щоб повторні виклики не
+                # відкочували більше, ніж було фактично списано.
                 already_corrected = await conn.fetchval("""
                     SELECT COALESCE(SUM(-qty), 0) FROM bot_workshop.history_logs
-                    WHERE article = $1 AND report_date = $2
+                    WHERE article = $1 AND report_date = $2 AND category = $3
                       AND operation = 'write_off_finished_main_retroactive'
-                """, base_article, body.report_date)
+                """, base_article, body.report_date, body.category)
 
                 if already_corrected + body.finished_main_qty > total_qty:
                     raise HTTPException(
@@ -632,8 +664,10 @@ async def set_shipment_retroactive_source(body: RetroactiveSourceBody):
                         )
                     )
 
+                is_engraved = _resolve_is_engraved(body.category)
                 fm_row = await conn.fetchrow(
-                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", base_article
+                    "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1 AND is_engraved = $2",
+                    base_article, is_engraved
                 )
                 fm_available = fm_row['quantity'] if fm_row else 0
                 if body.finished_main_qty > fm_available:
@@ -674,21 +708,21 @@ async def set_shipment_retroactive_source(body: RetroactiveSourceBody):
                         """, reversal_amount, hr['component'])
                         await conn.execute("""
                             INSERT INTO bot_workshop.history_logs
-                                (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                            VALUES ($1, $2, $3, $4, $5, 'write_off_reversal', $1, $6)
-                        """, correction_session_id, base_article, hr['component'], reversal_amount, hr['source'], body.report_date)
+                                (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                            VALUES ($1, $2, $3, $4, $5, 'write_off_reversal', $1, $6, $7)
+                        """, correction_session_id, base_article, hr['component'], reversal_amount, hr['source'], body.report_date, body.category)
                         reversed_components.append({"component": hr['component'], "source": hr['source'], "qty": reversal_amount})
 
                 await conn.execute("""
                     UPDATE bot_workshop.inventory_finished_main
                     SET quantity = quantity - $1
-                    WHERE item_id = $2
-                """, body.finished_main_qty, base_article)
+                    WHERE item_id = $2 AND is_engraved = $3
+                """, body.finished_main_qty, base_article, is_engraved)
                 await conn.execute("""
                     INSERT INTO bot_workshop.history_logs
-                        (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                    VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main_retroactive', $1, $4)
-                """, correction_session_id, base_article, -body.finished_main_qty, body.report_date)
+                        (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                    VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main_retroactive', $1, $4, $5)
+                """, correction_session_id, base_article, -body.finished_main_qty, body.report_date, body.category)
 
         return {
             "status": "ok",
@@ -1342,12 +1376,16 @@ async def update_admin_inventory(body: InventoryUpdate):
                         await conn.execute("INSERT INTO bot_workshop.inventory_cases (item_id, quantity, last_update) VALUES ($1, $2, CURRENT_TIMESTAMP)", body.item_id, body.new_quantity)
 
                 elif body.table_key == 'finished_main':
-                    row = await conn.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.item_id)
+                    # Ця сторінка (AdminWarehouses) редагує лише стандартний
+                    # (is_engraved=true) пул — пул заготовок під гравіювання
+                    # поки що коригується напряму SQL (окрема майбутня задача
+                    # для UI поповнення обох пулів).
+                    row = await conn.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1 AND is_engraved = true", body.item_id)
                     if row:
                         old_qty = int(row['quantity'] or 0)
-                        await conn.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2", body.new_quantity, body.item_id)
+                        await conn.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2 AND is_engraved = true", body.new_quantity, body.item_id)
                     else:
-                        await conn.execute("INSERT INTO bot_workshop.inventory_finished_main (item_id, quantity) VALUES ($1, $2)", body.item_id, body.new_quantity)
+                        await conn.execute("INSERT INTO bot_workshop.inventory_finished_main (item_id, quantity, is_engraved) VALUES ($1, $2, true)", body.item_id, body.new_quantity)
 
                 elif body.table_key == 'components':
                     row = await conn.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1::int", body.item_id)
@@ -1644,7 +1682,9 @@ async def inventory_check(body: InventoryCheckBody):
         elif body.table_key == 'cases_empty':
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_cases WHERE item_id = $1", body.item_id)
         elif body.table_key == 'finished_main':
-            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.item_id)
+            # Ця перевірка (AdminWarehouses) стосується лише стандартного
+            # (is_engraved=true) пулу — див. коментар в /api/admin/inventory.
+            row = await p.fetchrow("SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1 AND is_engraved = true", body.item_id)
         elif body.table_key == 'components':
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.cases_components WHERE id = $1", int(body.item_id))
         elif body.table_key == 'loot_box_operative':
@@ -1673,7 +1713,7 @@ async def inventory_check(body: InventoryCheckBody):
         elif body.table_key == 'cases_empty':
             await p.execute("UPDATE bot_workshop.inventory_cases SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
         elif body.table_key == 'finished_main':
-            await p.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2", body.actual_qty, body.item_id)
+            await p.execute("UPDATE bot_workshop.inventory_finished_main SET quantity = $1 WHERE item_id = $2 AND is_engraved = true", body.actual_qty, body.item_id)
         elif body.table_key == 'components':
             await p.execute("UPDATE bot_workshop.cases_components SET quantity = $1, last_updated = CURRENT_TIMESTAMP WHERE id = $2", body.actual_qty, int(body.item_id))
         elif body.table_key == 'loot_box_operative':
@@ -1759,6 +1799,16 @@ def _normalize_article(raw_article: str) -> tuple:
         base_article = article.replace('H', '').replace('T', '')
     return article, base_article
 
+# shipment_lists.category → inventory_finished_main.is_engraved. Дані
+# показали, що daily_shipments.is_engraved НЕ корелює з category (окрема
+# ознака, ймовірно про гравіювання шампурів) — тож пул визначаємо тільки
+# з category. 'Гравіювання' — заготовки під гравіювання (is_engraved=false),
+# усі інші категорії (в т.ч. 'Звичайні') — стандартний пул (is_engraved=true).
+ENGRAVING_CATEGORY = 'Гравіювання'
+
+def _resolve_is_engraved(category: Optional[str]) -> bool:
+    return category != ENGRAVING_CATEGORY
+
 @app.post("/api/admin/write-off")
 async def run_write_off(dry_run: bool = False):
     p = await get_pool()
@@ -1779,7 +1829,7 @@ async def run_write_off(dry_run: bool = False):
             async with conn.transaction():
                 # Отримуємо всі незаписані відправки
                 shipments_raw = await conn.fetch("""
-                    SELECT id, report_date, article, quantity, is_case, COALESCE(finished_main_qty, 0) AS finished_main_qty
+                    SELECT id, report_date, article, category, quantity, is_case, COALESCE(finished_main_qty, 0) AS finished_main_qty
                     FROM bot_workshop.daily_shipments
                     WHERE is_written_off = false
                     ORDER BY report_date, id
@@ -1788,19 +1838,22 @@ async def run_write_off(dry_run: bool = False):
                 if not shipments_raw:
                     return {"success": True, "written_off_count": 0, "errors": [], "details": ["Немає записів для списання"]}
 
-                # Агрегуємо по (report_date, article) — раніше було тільки по
-                # article, тож catch-up запуск, що покриває кілька pending дат
-                # одразу, змішував їх кількості в один запис без можливості
-                # розділити назад. Тепер кожен (дата, артикул) — окремий рядок
-                # history_logs з власним report_date, для майбутньої ретроактивної
-                # корекції.
+                # Агрегуємо по (report_date, article, category) — раніше було
+                # (report_date, article) без category, тож дві лінії
+                # shipment_lists (Звичайні/Гравіювання) на той самий (дата,
+                # артикул) змішувались в один агрегат і ділили один
+                # finished_main_qty override. category=NULL (легасі рядки до
+                # впровадження колонки) утворює свій окремий ключ — вони й
+                # так не матимуть finished_main_qty > 0 через category-фільтр
+                # у override-ендпоінтах, тож просто йдуть звичайним каскадом.
                 aggregated = {}
                 for r in shipments_raw:
-                    key = (r['report_date'], r['article'].strip().upper())
+                    key = (r['report_date'], r['article'].strip().upper(), r['category'])
                     if key not in aggregated:
                         aggregated[key] = {
                             'report_date': r['report_date'],
                             'article': r['article'].strip().upper(),
+                            'category': r['category'],
                             'quantity': 0,
                             'is_case': r['is_case'],
                             'finished_main_qty': 0,
@@ -1834,34 +1887,36 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, qty, item_id)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                            VALUES ($1, $2, $2, $3, 'inventory_operative', 'write_off_direct', $1, $4)
-                        """, session_id, article, -qty, row['report_date'])
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                            VALUES ($1, $2, $2, $3, 'inventory_operative', 'write_off_direct', $1, $4, $5)
+                        """, session_id, article, -qty, row['report_date'], row['category'])
                         details.append(f"Списано {qty} з operative: {item_id}")
                         continue
-                    
+
                     # 3. Ручний override "зі складу" (inventory_finished_main) —
                     # застосовується ПЕРШИМ, до основного каскаду. Виставляється
                     # інлайн у ShipmentsLog (тільки Вова/Матей); якщо складу не
                     # вистачає на момент запуску — залишок автоматично йде в
-                    # незмінений каскад нижче.
+                    # незмінений каскад нижче. Пул (is_engraved) визначається
+                    # з category цього агрегату — див. _resolve_is_engraved.
                     if row['finished_main_qty'] > 0:
+                        row_is_engraved = _resolve_is_engraved(row['category'])
                         fm_row = await conn.fetchrow("""
                             SELECT quantity FROM bot_workshop.inventory_finished_main
-                            WHERE item_id = $1
-                        """, base_article)
+                            WHERE item_id = $1 AND is_engraved = $2
+                        """, base_article, row_is_engraved)
                         fm_available = fm_row['quantity'] if fm_row else 0
                         from_finished_main = min(row['finished_main_qty'], fm_available, qty)
                         if from_finished_main > 0:
                             await conn.execute("""
                                 UPDATE bot_workshop.inventory_finished_main
                                 SET quantity = quantity - $1
-                                WHERE item_id = $2
-                            """, from_finished_main, base_article)
+                                WHERE item_id = $2 AND is_engraved = $3
+                            """, from_finished_main, base_article, row_is_engraved)
                             await conn.execute("""
-                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                                VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main', $1, $4)
-                            """, session_id, base_article, -from_finished_main, row['report_date'])
+                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                                VALUES ($1, $2, $2, $3, 'inventory_finished_main', 'write_off_finished_main', $1, $4, $5)
+                            """, session_id, base_article, -from_finished_main, row['report_date'], row['category'])
                             details.append(f"Списано {from_finished_main} зі складу (finished_main): {base_article}")
                             qty -= from_finished_main
 
@@ -1880,9 +1935,9 @@ async def run_write_off(dry_run: bool = False):
                             WHERE item_id = $2
                         """, from_finished, base_article)
                         await conn.execute("""
-                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                            VALUES ($1, $2, $2, $3, 'inventory_finished', 'write_off_finished', $1, $4)
-                        """, session_id, base_article, -from_finished, row['report_date'])
+                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                            VALUES ($1, $2, $2, $3, 'inventory_finished', 'write_off_finished', $1, $4, $5)
+                        """, session_id, base_article, -from_finished, row['report_date'], row['category'])
                         details.append(f"Списано {from_finished} з finished: {base_article}")
 
                     remaining = qty - from_finished
@@ -1919,13 +1974,13 @@ async def run_write_off(dry_run: bool = False):
                                     WHERE item_id = $2
                                 """, ing['quantity'] * remaining, component)
                                 await conn.execute("""
-                                    INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                                    VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6)
-                                """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
+                                    INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                                    VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6, $7)
+                                """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'], row['category'])
                             await conn.execute("""
-                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                                VALUES ($1, $2, $3, $4, 'inventory_cases', 'write_off_case', $1, $5)
-                            """, session_id, base_article, article, -remaining, row['report_date'])
+                                INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                                VALUES ($1, $2, $3, $4, 'inventory_cases', 'write_off_case', $1, $5, $6)
+                            """, session_id, base_article, article, -remaining, row['report_date'], row['category'])
                             details.append(f"Списано {remaining} кейсів {article} (cases+operative)")
                         else:
                             # C. Не кейс: recipes → inventory_operative
@@ -1953,9 +2008,9 @@ async def run_write_off(dry_run: bool = False):
                                         WHERE item_id = $2
                                     """, ing['quantity'] * remaining, component)
                                     await conn.execute("""
-                                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                                        VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6)
-                                    """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
+                                        INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                                        VALUES ($1, $2, $3, $4, $5, 'write_off_component', $1, $6, $7)
+                                    """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'], row['category'])
                                 details.append(f"Списано {remaining} x {base_article} (гриль)")
                             else:
                                 # D. Ящик: recipes_lootbox → loot_box_operative або inventory_operative
@@ -1983,9 +2038,9 @@ async def run_write_off(dry_run: bool = False):
                                             WHERE item_id = $2
                                         """, ing['quantity'] * remaining, component)
                                         await conn.execute("""
-                                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date)
-                                            VALUES ($1, $2, $3, $4, $5, 'write_off_box', $1, $6)
-                                        """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'])
+                                            INSERT INTO bot_workshop.history_logs (session_id, article, component, qty, source, operation, write_off_session_id, report_date, category)
+                                            VALUES ($1, $2, $3, $4, $5, 'write_off_box', $1, $6, $7)
+                                        """, session_id, base_article, component, -(ing['quantity'] * remaining), source_log, row['report_date'], row['category'])
                                     details.append(f"Списано {remaining} x {base_article} (ящик)")
                                 else:
                                     errors.append(f"Рецепт не знайдено: {base_article}")
@@ -2169,8 +2224,10 @@ async def wholesale_writeoff(wholesale_order_id: int):
                             qty, item_id
                         )
                     elif source_table == 'finished_main':
+                        # Опт-модуль не має поняття гравіювання — списуємо
+                        # завжди зі стандартного (is_engraved=true) пулу.
                         await conn.execute(
-                            "UPDATE bot_workshop.inventory_finished_main SET quantity = quantity - $1 WHERE item_id = $2",
+                            "UPDATE bot_workshop.inventory_finished_main SET quantity = quantity - $1 WHERE item_id = $2 AND is_engraved = true",
                             qty, item_id
                         )
                     elif source_table == 'cases':
@@ -2270,7 +2327,7 @@ async def set_wholesale_source(wholesale_order_id: int, body: WholesaleSourceBod
 
                 if body.from_warehouse > 0:
                     main_row = await conn.fetchrow(
-                        "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1", body.article
+                        "SELECT quantity FROM bot_workshop.inventory_finished_main WHERE item_id = $1 AND is_engraved = true", body.article
                     )
                     available = main_row['quantity'] if main_row else 0
                     if body.from_warehouse > available:

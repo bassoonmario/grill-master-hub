@@ -147,6 +147,7 @@ export interface Shipment {
 export interface ShipmentSourceBody {
   report_date: string
   article: string
+  category: string
   finished_main_qty: number
   tid: number
 }
@@ -154,6 +155,7 @@ export interface ShipmentSourceBody {
 export interface RetroactiveSourceBody {
   report_date: string
   article: string
+  category: string
   finished_main_qty: number
   tid: number
 }

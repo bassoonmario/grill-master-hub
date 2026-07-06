@@ -121,14 +121,17 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
   const nonWholesale = shipments.filter(s => !s.is_wholesale)
   const groupedShipments = getGroupedShipments(nonWholesale)
 
-  const applySource = (date: string, article: string, value: number) => {
+  // key включає category — та сама (дата, артикул) може мати дві незалежні
+  // лінії (Звичайні/Гравіювання), кожна зі своїм пулом finished_main, тож
+  // локальний UI-стан (і бекенд-запит) мають бути ізольовані по category.
+  const applySource = (date: string, article: string, category: string, value: number) => {
     if (!user) return
-    const key = `${date}:${article}`
+    const key = `${date}:${article}:${category}`
     setLocalValues(prev => ({ ...prev, [key]: value }))
     if (debounceTimers.current[key]) clearTimeout(debounceTimers.current[key])
     debounceTimers.current[key] = setTimeout(async () => {
       try {
-        await api.setShipmentSource({ report_date: date, article, finished_main_qty: value, tid: user.tid })
+        await api.setShipmentSource({ report_date: date, article, category, finished_main_qty: value, tid: user.tid })
         setSavedFlash(prev => ({ ...prev, [key]: true }))
         if (flashTimers.current[key]) clearTimeout(flashTimers.current[key])
         flashTimers.current[key] = setTimeout(() => {
@@ -140,14 +143,14 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
     }, 400)
   }
 
-  const submitRetroactive = async (date: string, article: string) => {
+  const submitRetroactive = async (date: string, article: string, category: string) => {
     if (!user) return
-    const key = `${date}:${article}`
+    const key = `${date}:${article}:${category}`
     const value = retroValues[key] ?? 0
     if (value <= 0) return
     setRetroStatus(prev => ({ ...prev, [key]: 'saving' }))
     try {
-      await api.setShipmentRetroactiveSource({ report_date: date, article, finished_main_qty: value, tid: user.tid })
+      await api.setShipmentRetroactiveSource({ report_date: date, article, category, finished_main_qty: value, tid: user.tid })
       setLocalRetroExtra(prev => ({ ...prev, [key]: (prev[key] ?? 0) + value }))
       setRetroValues(prev => ({ ...prev, [key]: 0 }))
       setRetroStatus(prev => ({ ...prev, [key]: 'done' }))
@@ -229,7 +232,9 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
 
                                 const extrasStr = parts.length > 0 ? ` (${parts.join(', ')})` : ''
 
-                                const overrideKey = `${date}:${item.article}`
+                                // catName в ключі — та сама (дата, артикул) може мати незалежні
+                                // лінії Звичайні/Гравіювання, кожна зі своїм пулом finished_main.
+                                const overrideKey = `${date}:${item.article}:${catName}`
                                 const maxOverride = Math.min(item.quantity, item.finished_main_available)
                                 const overrideValue = localValues[overrideKey] ?? item.finished_main_qty
 
@@ -265,7 +270,7 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                                 setRetroOpen(prev => ({ ...prev, [overrideKey]: false }))
                                               } else {
                                                 setOverrideOpen(prev => ({ ...prev, [overrideKey]: false }))
-                                                applySource(date, item.article, 0)
+                                                applySource(date, item.article, catName, 0)
                                               }
                                             }}
                                             className={`text-[10px] px-1.5 py-0.5 transition-colors ${
@@ -304,7 +309,7 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                             onChange={(e) => {
                                               const raw = Number(e.target.value)
                                               const clamped = Math.max(0, Math.min(raw, maxOverride))
-                                              applySource(date, item.article, clamped)
+                                              applySource(date, item.article, catName, clamped)
                                             }}
                                             className="w-14 bg-white/5 border border-white/10 rounded px-1 text-[12px] text-white"
                                           />
@@ -343,7 +348,7 @@ export function ShipmentsLog({ shipments }: ShipmentsLogProps) {
                                                 <button
                                                   type="button"
                                                   disabled={retroStatus[overrideKey] === 'saving' || !(retroValues[overrideKey] > 0)}
-                                                  onClick={() => submitRetroactive(date, item.article)}
+                                                  onClick={() => submitRetroactive(date, item.article, catName)}
                                                   className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-500/20 border-sky-500/40 text-sky-300 disabled:opacity-50"
                                                 >
                                                   {retroStatus[overrideKey] === 'saving' ? '...' : 'OK'}
