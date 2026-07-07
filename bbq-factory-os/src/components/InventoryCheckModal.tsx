@@ -105,6 +105,7 @@ export function InventoryCheckModal({ item, onClose, onSuccess }: Props) {
             delta < 0 ? 'bg-red-900/20 text-red-400' :
             'bg-white/5 text-white/50'
           }`}>
+            <p className="text-[10px] uppercase tracking-wider opacity-60 mb-1">Розбіжність цього разу</p>
             {delta > 0
               ? `+${delta} ↑ надлишок`
               : delta < 0

@@ -271,6 +271,7 @@ export interface InventoryCheckResult {
   system_qty: number
   actual_qty: number
   delta: number
+  raw_diff: number
   checked_at: string
 }
 

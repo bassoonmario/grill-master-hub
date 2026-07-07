@@ -1693,15 +1693,24 @@ async def inventory_check(body: InventoryCheckBody):
             row = await p.fetchrow("SELECT quantity FROM bot_workshop.loot_box_main WHERE item_id = $1", body.item_id)
 
         system_qty = float(row['quantity']) if row else 0.0
-        delta = body.actual_qty - system_qty
+        raw_diff = body.actual_qty - system_qty
+
+        prev_check = await p.fetchrow("""
+            SELECT delta FROM bot_workshop.inventory_checks
+            WHERE item_id = $1 AND table_key = $2
+            ORDER BY checked_at DESC, id DESC
+            LIMIT 1
+        """, body.item_id, body.table_key)
+        prev_cumulative = float(prev_check['delta']) if prev_check else 0.0
+        delta = prev_cumulative + raw_diff
 
         new_row = await p.fetchrow("""
             INSERT INTO bot_workshop.inventory_checks
-                (item_id, table_key, system_qty, actual_qty, delta, note, checked_at)
-            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-            RETURNING id, item_id, table_key, system_qty, actual_qty, delta,
+                (item_id, table_key, system_qty, actual_qty, delta, raw_diff, note, checked_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+            RETURNING id, item_id, table_key, system_qty, actual_qty, delta, raw_diff,
                       to_char(checked_at, 'DD.MM.YY HH24:MI') AS checked_at
-        """, body.item_id, body.table_key, system_qty, body.actual_qty, delta, body.note)
+        """, body.item_id, body.table_key, system_qty, body.actual_qty, delta, raw_diff, body.note)
 
         # Оновлюємо системне qty до фактичного значення
         if body.table_key == 'finished':
@@ -1737,7 +1746,7 @@ async def get_latest_checks():
                 item_id, table_key, delta,
                 to_char(checked_at, 'DD.MM.YY HH24:MI') AS checked_at
             FROM bot_workshop.inventory_checks
-            ORDER BY item_id, table_key, checked_at DESC
+            ORDER BY item_id, table_key, inventory_checks.checked_at DESC, id DESC
         """)
         return [dict(r) for r in rows]
     except Exception as e:

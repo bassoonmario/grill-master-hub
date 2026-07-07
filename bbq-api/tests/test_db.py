@@ -452,19 +452,23 @@ async def test_inventory_checks_table_keys_are_valid(conn):
 
 @pytest.mark.asyncio
 async def test_inventory_checks_delta_matches_calculation(conn):
-    """delta = actual_qty - system_qty для всіх записів в inventory_checks."""
+    """delta = наростаюча сума (actual_qty - system_qty) в хронологічному порядку для кожної пари item_id+table_key."""
     rows = await conn.fetch("""
-        SELECT item_id, table_key, actual_qty, system_qty, delta
+        SELECT id, item_id, table_key, actual_qty, system_qty, delta
         FROM bot_workshop.inventory_checks
-        LIMIT 200
+        ORDER BY item_id, table_key, checked_at ASC, id ASC
     """)
+    running = {}
     mismatches = []
     for r in rows:
-        expected = round(float(r['actual_qty']) - float(r['system_qty']), 6)
+        key = (r['item_id'], r['table_key'])
+        raw_diff = float(r['actual_qty']) - float(r['system_qty'])
+        expected = round(running.get(key, 0.0) + raw_diff, 6)
         actual = round(float(r['delta']), 6)
         if abs(expected - actual) > 0.001:
-            mismatches.append(f"{r['table_key']}:{r['item_id']} delta={actual} but {r['actual_qty']}-{r['system_qty']}={expected}")
-    assert not mismatches, f"Розбіжності delta: {mismatches[:5]}"
+            mismatches.append(f"{r['table_key']}:{r['item_id']} id={r['id']} delta={actual} expected_cumulative={expected}")
+        running[key] = expected
+    assert not mismatches, f"Розбіжності cumulative delta: {mismatches[:5]}"
 
 
 # ── Дані loot_box ─────────────────────────────────────────────────────────────

@@ -40,21 +40,47 @@ interface LootBoxRow {
   min_limit?: number
 }
 
+// table_key (as sent to /api/admin/inventory/check) -> StockItem.category (as returned by api.stock())
+const TABLE_KEY_TO_CATEGORY: Record<string, StockItem['category']> = {
+  cases_empty: 'cases_empty',
+  finished: 'ready',
+  finished_main: 'finished_main',
+  operative: 'operative',
+  main: 'main',
+  components: 'cases',
+  loot_box_operative: 'loot_box_operative',
+  loot_box_main: 'loot_box_main',
+}
+
 export function AdminWarehouses() {
   const [items, setItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'warehouses' | 'grills' | 'components' | 'loot_boxes'>('warehouses')
-  
+
   const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [isSyncing, setIsSyncing] = useState(false)
   const [replenishModal, setReplenishModal] = useState<ReplenishItem | null>(null)
   const [checkModal, setCheckModal] = useState<CheckModalItem | null>(null)
   const [checksMap, setChecksMap] = useState<Record<string, { delta: number; checked_at: string }>>({})
+  const [checkLoadingKey, setCheckLoadingKey] = useState<string | null>(null)
 
-  const openCheck = (name: string, item_id: string, table_key: string, system_qty: number) =>
-    setCheckModal({ name, item_id, table_key, system_qty })
+  const openCheck = async (name: string, item_id: string, table_key: string, lastKnownQty: number) => {
+    const key = `${table_key}:${item_id}`
+    setCheckLoadingKey(key)
+    try {
+      const fresh = await api.stock()
+      const category = TABLE_KEY_TO_CATEGORY[table_key]
+      const match = fresh.find(i => i.sku === item_id && i.category === category)
+      setCheckModal({ name, item_id, table_key, system_qty: match ? match.qty : lastKnownQty })
+    } catch (e) {
+      console.error(e)
+      setCheckModal({ name, item_id, table_key, system_qty: lastKnownQty })
+    } finally {
+      setCheckLoadingKey(null)
+    }
+  }
 
 
   const loadData = useCallback(async () => {
@@ -288,7 +314,7 @@ export function AdminWarehouses() {
                               const chk = checksMap[`cases_empty:${row.sku}`]
                               if (!chk) return null
                               const d = chk.delta
-                              return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                              return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
                             })()}
                           </div>
 
@@ -307,22 +333,22 @@ export function AdminWarehouses() {
                               <div className="flex flex-col items-center gap-0.5">
                                 <div className="flex items-center gap-0.5">
                                   <span className="text-[#c9963a] font-mono text-sm">{row.cases_empty}</span>
-                                  <button onClick={() => openCheck(row.name, row.sku, 'cases_empty', row.cases_empty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'cases_empty', row.cases_empty)} disabled={checkLoadingKey === `cases_empty:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `cases_empty:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3.5 h-3.5" />}</button>
                                 </div>
                               </div>
                               <div className="flex flex-col items-center gap-0.5">
                                 <div className="flex items-center gap-0.5">
                                   <span className="text-[#c9963a] font-mono text-sm">{row.ready}</span>
-                                  <button onClick={() => openCheck(row.name, row.sku, 'finished', row.ready)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'finished', row.ready)} disabled={checkLoadingKey === `finished:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `finished:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3.5 h-3.5" />}</button>
                                 </div>
-                                {(() => { const chk = checksMap[`finished:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                {(() => { const chk = checksMap[`finished:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
                               </div>
                               <div className="flex flex-col items-center gap-0.5">
                                 <div className="flex items-center gap-0.5">
                                   <span className="text-[#c9963a] font-mono text-sm">{row.finished_main}</span>
-                                  <button onClick={() => openCheck(row.name, row.sku, 'finished_main', row.finished_main)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'finished_main', row.finished_main)} disabled={checkLoadingKey === `finished_main:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `finished_main:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3.5 h-3.5" />}</button>
                                 </div>
-                                {(() => { const chk = checksMap[`finished_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                {(() => { const chk = checksMap[`finished_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
                               </div>
                               <div className="flex items-center gap-0.5">
                                 <button onClick={() => startEditGrill(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
@@ -366,7 +392,7 @@ export function AdminWarehouses() {
                                 const chk = checksMap[`operative:${row.sku}`]
                                 if (!chk) return null
                                 const d = chk.delta
-                                return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                                return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
                               })()}
                             </div>
 
@@ -374,7 +400,7 @@ export function AdminWarehouses() {
                               ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
                               : <div className="flex items-center justify-center gap-0.5">
                                   <span className={`font-mono text-xs ${opColor}`}>{row.operative}</span>
-                                  <button onClick={() => openCheck(row.name, row.sku, 'operative', row.operative)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'operative', row.operative)} disabled={checkLoadingKey === `operative:${row.sku}`} className="p-1 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `operative:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3 h-3" />}</button>
                                 </div>
                             }
 
@@ -383,9 +409,9 @@ export function AdminWarehouses() {
                               : <div className="flex flex-col items-center gap-0.5">
                                   <div className="flex items-center gap-0.5">
                                     <span className="text-[#c9963a] font-mono text-xs">{row.main}</span>
-                                    <button onClick={() => openCheck(row.name, row.sku, 'main', row.main)} className="p-1 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                    <button onClick={() => openCheck(row.name, row.sku, 'main', row.main)} disabled={checkLoadingKey === `main:${row.sku}`} className="p-1 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `main:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3 h-3" />}</button>
                                   </div>
-                                  {(() => { const chk = checksMap[`main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                  {(() => { const chk = checksMap[`main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
                                 </div>
                             }
 
@@ -433,7 +459,7 @@ export function AdminWarehouses() {
                                 const chk = checksMap[`loot_box_operative:${row.sku}`]
                                 if (!chk) return null
                                 const d = chk.delta
-                                return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                                return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
                               })()}
                             </div>
 
@@ -441,7 +467,7 @@ export function AdminWarehouses() {
                               ? <input type="number" value={editValues.operative || ''} onChange={e => setEditValues(p => ({...p, operative: e.target.value}))} disabled={isSyncing} className="w-full bg-black border border-[#c9963a] rounded p-1 text-center text-white font-mono text-xs outline-none" />
                               : <div className="flex items-center justify-center gap-0.5">
                                   <span className={`font-mono text-xs ${opColor}`}>{row.operative}</span>
-                                  <button onClick={() => openCheck(row.name, row.sku, 'loot_box_operative', row.operative)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                  <button onClick={() => openCheck(row.name, row.sku, 'loot_box_operative', row.operative)} disabled={checkLoadingKey === `loot_box_operative:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `loot_box_operative:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3 h-3" />}</button>
                                 </div>
                             }
 
@@ -450,9 +476,9 @@ export function AdminWarehouses() {
                               : <div className="flex flex-col items-center gap-0.5">
                                   <div className="flex items-center gap-0.5">
                                     <span className="text-[#c9963a] font-mono text-xs">{row.main}</span>
-                                    <button onClick={() => openCheck(row.name, row.sku, 'loot_box_main', row.main)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-3 h-3" /></button>
+                                    <button onClick={() => openCheck(row.name, row.sku, 'loot_box_main', row.main)} disabled={checkLoadingKey === `loot_box_main:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `loot_box_main:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3 h-3" />}</button>
                                   </div>
-                                  {(() => { const chk = checksMap[`loot_box_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                  {(() => { const chk = checksMap[`loot_box_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
                                 </div>
                             }
 
@@ -489,7 +515,7 @@ export function AdminWarehouses() {
                             const chk = checksMap[`components:${row.sku}`]
                             if (!chk) return null
                             const d = chk.delta
-                            return <span className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
+                            return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span>
                           })()}
                         </div>
 
@@ -502,7 +528,7 @@ export function AdminWarehouses() {
                               : `${row.qty} шт`
                             }
                           </span>
-                          <button onClick={() => openCheck(row.name, row.sku, 'components', row.qty)} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors"><ClipboardCheck className="w-4 h-4" /></button>
+                          <button onClick={() => openCheck(row.name, row.sku, 'components', row.qty)} disabled={checkLoadingKey === `components:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `components:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-4 h-4" />}</button>
                           <button onClick={() => setReplenishModal(row)} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-4 h-4" /></button>
                         </div>
                       </div>
