@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { SectionTitle, Spinner, Tabs } from '@/components/UI'
 import { ReplenishModal, ReplenishItem } from '@/components/ReplenishModal'
 import { InventoryCheckModal, CheckModalItem } from '@/components/InventoryCheckModal'
+import { FinishedMainReplenishModal, FinishedMainReplenishItem } from '@/components/FinishedMainReplenishModal'
 import { api, StockItem, LatestCheck } from '@/lib/api'
 import { Pencil, Check, X, AlertCircle, PlusCircle, ClipboardCheck } from 'lucide-react'
 
@@ -11,6 +12,7 @@ interface GrillRow {
   cases_empty: number
   ready: number
   finished_main: number
+  finished_main_engraved: number
 }
 
 interface WarehouseRow {
@@ -62,6 +64,7 @@ export function AdminWarehouses() {
   const [editValues, setEditValues] = useState<Record<string, string>>({})
   const [isSyncing, setIsSyncing] = useState(false)
   const [replenishModal, setReplenishModal] = useState<ReplenishItem | null>(null)
+  const [finishedMainReplenish, setFinishedMainReplenish] = useState<FinishedMainReplenishItem | null>(null)
   const [checkModal, setCheckModal] = useState<CheckModalItem | null>(null)
   const [checksMap, setChecksMap] = useState<Record<string, { delta: number; checked_at: string }>>({})
   const [checkLoadingKey, setCheckLoadingKey] = useState<string | null>(null)
@@ -222,12 +225,13 @@ export function AdminWarehouses() {
   const safeItems = items || []
   safeItems.forEach(i => {
     if (!i) return
-    if (['cases_empty', 'ready', 'finished_main'].includes(i.category)) {
-      if (!grillsMap.has(i.sku)) grillsMap.set(i.sku, { sku: i.sku, name: i.name || i.sku, cases_empty: 0, ready: 0, finished_main: 0 })
+    if (['cases_empty', 'ready', 'finished_main', 'finished_main_engraved'].includes(i.category)) {
+      if (!grillsMap.has(i.sku)) grillsMap.set(i.sku, { sku: i.sku, name: i.name || i.sku, cases_empty: 0, ready: 0, finished_main: 0, finished_main_engraved: 0 })
       const entry = grillsMap.get(i.sku)!
       if (i.category === 'cases_empty') entry.cases_empty = i.qty
       if (i.category === 'ready') entry.ready = i.qty
       if (i.category === 'finished_main') entry.finished_main = i.qty
+      if (i.category === 'finished_main_engraved') entry.finished_main_engraved = i.qty
     } else if (['operative', 'main'].includes(i.category)) {
       if (!warehousesMap.has(i.sku)) warehousesMap.set(i.sku, { sku: i.sku, name: i.name || i.sku, operative: 0, main: 0 })
       const entry = warehousesMap.get(i.sku)!
@@ -345,10 +349,16 @@ export function AdminWarehouses() {
                               </div>
                               <div className="flex flex-col items-center gap-0.5">
                                 <div className="flex items-center gap-0.5">
+                                  <span className="text-[9px] font-mono text-white/30">Ст.</span>
                                   <span className="text-[#c9963a] font-mono text-sm">{row.finished_main}</span>
                                   <button onClick={() => openCheck(row.name, row.sku, 'finished_main', row.finished_main)} disabled={checkLoadingKey === `finished_main:${row.sku}`} className="p-1.5 text-white/30 hover:text-blue-400 transition-colors disabled:opacity-40">{checkLoadingKey === `finished_main:${row.sku}` ? <Spinner /> : <ClipboardCheck className="w-3.5 h-3.5" />}</button>
+                                  <button onClick={() => setFinishedMainReplenish({ sku: row.sku, name: row.name })} className="p-1.5 text-white/30 hover:text-green-400 transition-colors"><PlusCircle className="w-3.5 h-3.5" /></button>
                                 </div>
                                 {(() => { const chk = checksMap[`finished_main:${row.sku}`]; if (!chk) return null; const d = chk.delta; return <span title="Накопичена розбіжність" className={`text-[10px] font-mono ${d > 0 ? 'text-green-400' : d < 0 ? 'text-red-400' : 'text-white/40'}`}>{d > 0 ? `+${d} ↑` : d < 0 ? `${d} ↓` : '= без змін'}</span> })()}
+                                <div className="flex items-center gap-0.5">
+                                  <span className="text-[9px] font-mono text-white/30">Гр.</span>
+                                  <span className="text-white/50 font-mono text-xs">{row.finished_main_engraved}</span>
+                                </div>
                               </div>
                               <div className="flex items-center gap-0.5">
                                 <button onClick={() => startEditGrill(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
@@ -544,6 +554,11 @@ export function AdminWarehouses() {
       <ReplenishModal
         item={replenishModal}
         onClose={() => setReplenishModal(null)}
+        onSuccess={loadData}
+      />
+      <FinishedMainReplenishModal
+        item={finishedMainReplenish}
+        onClose={() => setFinishedMainReplenish(null)}
         onSuccess={loadData}
       />
       <InventoryCheckModal

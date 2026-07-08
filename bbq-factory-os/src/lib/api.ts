@@ -68,7 +68,7 @@ export interface StockItem {
   qty: number
   unit: string
   status: 'ok' | 'low' | 'critical'
-  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished' | 'loot_box_operative' | 'loot_box_main'
+  category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished_main_engraved' | 'finished' | 'loot_box_operative' | 'loot_box_main'
   min_limit?: number
   unit_type?: string
   conversion_factor?: number
@@ -214,6 +214,9 @@ export interface NotificationAlert {
   conversion_factor?: number
 }
 
+export type TaskPriority = 'none' | 'low' | 'medium' | 'high'
+export type AssigneeRole = 'driver' | 'master'
+
 export interface IncomingTask {
   id: number
   item_id: string
@@ -225,6 +228,8 @@ export interface IncomingTask {
   driver_comment: string | null
   admin_comment: string | null
   is_simple: boolean
+  priority: TaskPriority
+  assignee_role: AssigneeRole
 }
 
 export interface DriverTask {
@@ -246,6 +251,7 @@ export interface DriverTask {
   input_qty?: number
   unit_type?: string
   conversion_factor?: number
+  priority?: TaskPriority
 }
 
 export interface ReplenishAlert {
@@ -322,6 +328,17 @@ export interface OfficeTask {
   created_at: string
   completed_at: string | null
   created_by: string | null
+  priority: TaskPriority
+  assignee_role: AssigneeRole
+}
+
+export interface MasterOfficeOrder {
+  id: number
+  admin_comment: string | null
+  created_by: string | null
+  priority: TaskPriority
+  created_at: string
+  status: string
 }
 
 export interface OfficeStockRow {
@@ -553,7 +570,7 @@ export const api = {
     ),
 
   completeSimpleTask: (taskId: number) =>
-    post<{ status: string }>(`/api/tasks/incoming/${taskId}/complete`, {}),
+    post<IncomingTask>(`/api/tasks/incoming/${taskId}/complete`, {}),
 
   // ─── MASTER REPLENISH ────────────────────────────────────────────────────────
   getReplenishAlerts: (): Promise<ReplenishAlert[]> =>
@@ -566,6 +583,12 @@ export const api = {
     post<{ success: boolean; added_qty: number; new_quantity: number }>(
       `/api/admin/components/${component_id}/replenish`,
       { input_value, warehouse }
+    ),
+
+  replenishFinishedMain: (article: string, quantity: number, is_engraved: boolean) =>
+    post<{ status: string; new_quantity: number }>(
+      '/api/admin/inventory/finished-main/replenish',
+      { article, quantity, is_engraved }
     ),
 
   inventoryCheck: (item_id: string, table_key: string, actual_qty: number, note?: string): Promise<InventoryCheckResult> =>
@@ -606,14 +629,17 @@ export const api = {
     patch<{ updated: number }>('/api/admin/recipes/lootbox', { box_id, item_id, quantity }),
 
   // ─── OFFICE API ─────────────────────────────────────────────────────────────
-  createOfficeTask: (admin_comment: string, created_by?: string) =>
-    post<{ status: string; id: number }>('/api/office/tasks', { admin_comment, created_by }),
+  createOfficeTask: (admin_comment: string, created_by?: string, assignee_role?: AssigneeRole, priority?: TaskPriority) =>
+    post<{ status: string; id: number }>('/api/office/tasks', { admin_comment, created_by, assignee_role, priority }),
 
   getOfficeTasks: (): Promise<OfficeTask[]> =>
     get<OfficeTask[]>('/api/office/tasks'),
 
   getOfficePendingOrders: (): Promise<OfficeTask[]> =>
     get<OfficeTask[]>('/api/office/pending-orders'),
+
+  getMasterOfficeOrders: (): Promise<MasterOfficeOrder[]> =>
+    get<MasterOfficeOrder[]>('/api/master/office-orders'),
 
   getOfficeStock: (): Promise<OfficeStockRow[]> =>
     get<OfficeStockRow[]>('/api/office/stock'),

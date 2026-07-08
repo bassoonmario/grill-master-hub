@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Tabs, Spinner, EmptyState, SectionTitle } from '@/components/UI'
+import { Tabs, Spinner, EmptyState, SectionTitle, PriorityBadge } from '@/components/UI'
 import { api, OfficeTask, OfficeStockRow } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import { Plus, ClipboardList, Store, Package, Send, AlertCircle, CheckCircle2, ClipboardCheck } from 'lucide-react'
+import { Plus, ClipboardList, Store, Package, Send, AlertCircle, CheckCircle2, ClipboardCheck, Truck, User } from 'lucide-react'
+import type { AssigneeRole, TaskPriority } from '@/lib/api'
 import { OfficeGrillsView } from './OfficeGrillsTab'
 
 type TabKey = 'create' | 'tasks' | 'shop' | 'grills'
@@ -36,9 +37,18 @@ export function OfficeCabinet() {
 
 // ─── СТВОРИТИ ЗАВДАННЯ ──────────────────────────────────────────────────────
 
+const PRIORITY_OPTIONS: { key: TaskPriority; label: string; color: string; dim: string }[] = [
+  { key: 'none',   label: 'Немає',    color: 'var(--text-dim)', dim: 'transparent' },
+  { key: 'low',    label: 'Низький',  color: 'var(--green)',    dim: 'var(--green-dim)' },
+  { key: 'medium', label: 'Середній', color: 'var(--orange)',   dim: 'var(--orange-dim)' },
+  { key: 'high',   label: 'Високий',  color: 'var(--red)',      dim: 'var(--red-dim)' },
+]
+
 function CreateTaskTab() {
   const { user } = useAuth()
   const [comment, setComment] = useState('')
+  const [assigneeRole, setAssigneeRole] = useState<AssigneeRole>('driver')
+  const [priority, setPriority] = useState<TaskPriority>('none')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -47,9 +57,11 @@ function CreateTaskTab() {
     if (!comment.trim()) { setError('Введіть текст завдання'); return }
     setSaving(true); setError(null); setSuccess(null)
     try {
-      await api.createOfficeTask(comment.trim(), user?.name)
+      await api.createOfficeTask(comment.trim(), user?.name, assigneeRole, priority)
       setComment('')
-      setSuccess('Завдання створено і надіслано водію')
+      setAssigneeRole('driver')
+      setPriority('none')
+      setSuccess(assigneeRole === 'master' ? 'Завдання створено і надіслано майстру' : 'Завдання створено і надіслано водію')
     } catch (e) {
       setError('Помилка створення завдання')
     } finally {
@@ -73,8 +85,57 @@ function CreateTaskTab() {
           <span>{success}</span>
         </div>
       )}
+
       <div>
-        <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Текст завдання для водія</label>
+        <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Кому</label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setAssigneeRole('driver')}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider transition-all border ${
+              assigneeRole === 'driver'
+                ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40'
+                : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'
+            }`}
+          >
+            <Truck className="w-4 h-4" /> Водій
+          </button>
+          <button
+            onClick={() => setAssigneeRole('master')}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider transition-all border ${
+              assigneeRole === 'master'
+                ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40'
+                : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'
+            }`}
+          >
+            <User className="w-4 h-4" /> Майстер (Вова)
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Пріоритет</label>
+        <div className="flex gap-2">
+          {PRIORITY_OPTIONS.map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setPriority(opt.key)}
+              className="flex-1 py-2.5 rounded-xl font-mono text-[11px] uppercase tracking-wider transition-all border"
+              style={{
+                background:  priority === opt.key ? opt.dim : '#121212',
+                borderColor: priority === opt.key ? opt.color : 'rgba(255,255,255,0.1)',
+                color:       priority === opt.key ? opt.color : 'rgba(255,255,255,0.4)',
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">
+          Текст завдання для {assigneeRole === 'master' ? 'майстра' : 'водія'}
+        </label>
         <textarea
           value={comment}
           onChange={e => setComment(e.target.value)}
@@ -114,7 +175,11 @@ function TasksTab() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 15000)
+    return () => clearInterval(interval)
+  }, [load])
 
   const active = tasks.filter(t => t.status !== 'архів')
   const archived = tasks.filter(t => t.status === 'архів')
@@ -140,7 +205,10 @@ function TasksTab() {
               <div className="text-[10px] font-mono text-white/20 uppercase tracking-widest mb-2">Архів</div>
               {archived.map(t => (
                 <div key={t.id} className="bg-[#0e0e0e] border border-white/5 rounded-xl p-4 opacity-50 mb-2">
-                  <p className="text-white/50 font-mono text-xs">{t.admin_comment}</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <PriorityBadge priority={t.priority} />
+                  </div>
+                  <p className="text-white/50 font-mono text-xs line-through decoration-white/30">{t.admin_comment}</p>
                   <span className="text-[9px] font-mono text-white/15">{t.created_at}</span>
                 </div>
               ))}
@@ -186,6 +254,12 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
 
   return (
     <div className="bg-[#121212] border border-white/10 rounded-xl p-4 space-y-2">
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={task.priority} />
+        {task.assignee_role === 'master' && (
+          <span className="text-[9px] font-mono text-white/30 uppercase bg-white/5 px-2 py-0.5 rounded">майстру</span>
+        )}
+      </div>
       <p className="text-white font-mono text-sm break-words">{task.admin_comment}</p>
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-mono text-white/30 uppercase">{task.status}</span>

@@ -135,6 +135,11 @@ class InventoryUpdate(BaseModel):
     item_id: str
     new_quantity: int
 
+class FinishedMainReplenishBody(BaseModel):
+    article: str
+    quantity: int
+    is_engraved: bool
+
 class TaskDelivery(BaseModel):
     task_id: int
     destination: str  # 'main' або 'operative'
@@ -204,6 +209,8 @@ class PickupReserveBody(BaseModel):
 class OfficeTaskCreate(BaseModel):
     admin_comment: str
     created_by: Optional[str] = None
+    assignee_role: Literal['driver', 'master'] = 'driver'
+    priority: Literal['none', 'low', 'medium', 'high'] = 'none'
 
 class OfficeStockUpdate(BaseModel):
     item_id: str
@@ -290,7 +297,8 @@ async def get_stock():
             FROM bot_workshop.inventory_cases
 
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'finished_main' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status,
+                CASE WHEN is_engraved THEN 'finished_main' ELSE 'finished_main_engraved' END AS category
             FROM bot_workshop.inventory_finished_main
 
             UNION ALL
@@ -1084,7 +1092,7 @@ async def get_incoming_tasks(status_filter: Optional[str] = None):
                 SELECT id, item_id, target_qty, actual_qty, status,
                        to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
                        to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at,
-                       driver_comment, admin_comment, is_simple
+                       driver_comment, admin_comment, is_simple, priority, assignee_role
                 FROM bot_workshop.incoming_tasks
                 WHERE status = $1
                 ORDER BY created_at DESC
@@ -1094,9 +1102,9 @@ async def get_incoming_tasks(status_filter: Optional[str] = None):
                 SELECT id, item_id, target_qty, actual_qty, status,
                        to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
                        to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at,
-                       driver_comment, admin_comment, is_simple
+                       driver_comment, admin_comment, is_simple, priority, assignee_role
                 FROM bot_workshop.incoming_tasks
-                ORDER BY CASE status 
+                ORDER BY CASE status
                     WHEN 'очікується' THEN 1 
                     WHEN 'в роботі' THEN 2 
                     ELSE 3 
@@ -1133,10 +1141,10 @@ async def create_office_task(body: OfficeTaskCreate):
     try:
         new_id = await p.fetchval("""
             INSERT INTO bot_workshop.incoming_tasks
-                (item_id, target_qty, status, admin_comment, is_simple, task_type, source_role, created_by)
-            VALUES ('', 0, 'очікується', $1, true, 'simple', 'office', $2)
+                (item_id, target_qty, status, admin_comment, is_simple, task_type, source_role, created_by, assignee_role, priority)
+            VALUES ('', 0, 'очікується', $1, true, 'simple', 'office', $2, $3, $4)
             RETURNING id
-        """, body.admin_comment, body.created_by)
+        """, body.admin_comment, body.created_by, body.assignee_role, body.priority)
         return {"status": "created", "id": new_id}
     except Exception as e:
         print(f"Error in POST /api/office/tasks: {e}")
@@ -1147,7 +1155,7 @@ async def get_office_tasks():
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT id, admin_comment, status, created_by,
+            SELECT id, admin_comment, status, created_by, priority, assignee_role,
                    to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
                    to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at
             FROM bot_workshop.incoming_tasks
@@ -1169,7 +1177,7 @@ async def get_office_pending_orders():
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT id, admin_comment, created_by,
+            SELECT id, admin_comment, created_by, priority, assignee_role,
                    to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at, status
             FROM bot_workshop.incoming_tasks
             WHERE source_role = 'office' AND status IN ('очікується', 'в роботі')
@@ -1178,6 +1186,24 @@ async def get_office_pending_orders():
         return [dict(r) for r in rows]
     except Exception as e:
         print(f"Error in GET /api/office/pending-orders: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/master/office-orders")
+async def get_master_office_orders():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, admin_comment, created_by, priority,
+                   to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at, status
+            FROM bot_workshop.incoming_tasks
+            WHERE source_role = 'office' AND assignee_role = 'master' AND status != 'архів'
+            ORDER BY CASE priority
+                WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4
+            END, created_at ASC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/master/office-orders: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/office/stock")
@@ -1472,6 +1498,36 @@ async def replenish_component(component_id: int, body: dict = Body(...)):
         print(f"Error in POST /api/admin/components/{component_id}/replenish: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/admin/inventory/finished-main/replenish")
+async def replenish_finished_main(body: FinishedMainReplenishBody):
+    if body.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Кількість має бути більшою за нуль")
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    INSERT INTO bot_workshop.inventory_finished_main (item_id, quantity, is_engraved)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (item_id, is_engraved)
+                    DO UPDATE SET quantity = inventory_finished_main.quantity + EXCLUDED.quantity
+                    RETURNING quantity
+                """, body.article, body.quantity, body.is_engraved)
+                # Той самий напрямок, що й _resolve_is_engraved: is_engraved=false —
+                # пул під гравіювання, is_engraved=true — стандартний пул.
+                category = 'Звичайні' if body.is_engraved else 'Гравіювання'
+                await conn.execute("""
+                    INSERT INTO bot_workshop.history_logs
+                        (article, component, qty, source, operation, category)
+                    VALUES ($1, $1, $2, 'inventory_finished_main', 'replenish_finished_main', $3)
+                """, body.article, body.quantity, category)
+                return {"status": "ok", "new_quantity": row["quantity"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in POST /api/admin/inventory/finished-main/replenish: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/driver/tasks")
 async def get_driver_tasks():
     p = await get_pool()
@@ -1479,12 +1535,12 @@ async def get_driver_tasks():
         rows = await p.fetch("""
             SELECT it.id, it.item_id, it.target_qty, it.actual_qty, it.status,
                    it.admin_comment, it.driver_comment, it.is_simple, it.created_at,
-                   it.task_type,
+                   it.task_type, it.priority,
                    it.component_id, it.input_qty, it.unit_type, it.conversion_factor,
                    pr.pcs_per_pack, pr.packs_per_box, pr.pcs_per_box
             FROM bot_workshop.incoming_tasks it
             LEFT JOIN bot_workshop.packaging_rules pr ON pr.item_id = it.item_id
-            WHERE it.status IN ('очікується', 'в роботі')
+            WHERE it.status IN ('очікується', 'в роботі') AND COALESCE(it.assignee_role, 'driver') != 'master'
             ORDER BY it.created_at ASC
         """)
         return [dict(r) for r in rows]
@@ -1594,12 +1650,23 @@ async def get_items_components():
 async def complete_simple_task(task_id: int):
     p = await get_pool()
     try:
-        await p.execute("""
+        task = await p.fetchrow("SELECT is_simple, assignee_role FROM bot_workshop.incoming_tasks WHERE id = $1", task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Задачу не знайдено")
+        if not task['is_simple']:
+            raise HTTPException(status_code=400, detail="Одноклікове завершення доступне лише для простих завдань")
+        if task['assignee_role'] != 'driver':
+            raise HTTPException(status_code=400, detail="Це завдання призначене не водію")
+
+        row = await p.fetchrow("""
             UPDATE bot_workshop.incoming_tasks
-            SET status = 'прийнято', completed_at = CURRENT_TIMESTAMP
-            WHERE id = $1 AND is_simple = true
+            SET status = 'архів', completed_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            RETURNING *
         """, task_id)
-        return {"status": "ok"}
+        return dict(row)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1655,10 +1722,10 @@ async def get_driver_tasks_done():
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT id, item_id, target_qty, actual_qty, status, admin_comment, 
-                   driver_comment, is_simple, created_at, completed_at
+            SELECT id, item_id, target_qty, actual_qty, status, admin_comment,
+                   driver_comment, is_simple, created_at, completed_at, priority
             FROM bot_workshop.incoming_tasks
-            WHERE status = 'прийнято'
+            WHERE status = 'прийнято' AND COALESCE(assignee_role, 'driver') != 'master'
             ORDER BY completed_at DESC
             LIMIT 50
         """)

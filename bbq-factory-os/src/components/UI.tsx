@@ -169,6 +169,29 @@ export function StatusTag({ type }: { type: TagType }) {
   )
 }
 
+// ─── PRIORITY BADGE ───────────────────────────────────────────────────────────
+export type TaskPriority = 'none' | 'low' | 'medium' | 'high'
+
+const PRIORITY_STYLES: Record<TaskPriority, { label: string; color: string; dim: string }> = {
+  none:   { label: 'Немає',    color: 'var(--text-dim)', dim: 'transparent' },
+  low:    { label: 'Низький',  color: 'var(--green)',    dim: 'var(--green-dim)' },
+  medium: { label: 'Середній', color: 'var(--orange)',   dim: 'var(--orange-dim)' },
+  high:   { label: 'Високий',  color: 'var(--red)',      dim: 'var(--red-dim)' },
+}
+
+export function PriorityBadge({ priority }: { priority?: TaskPriority }) {
+  if (!priority || priority === 'none') return null
+  const s = PRIORITY_STYLES[priority]
+  return (
+    <span
+      className="font-mono text-[9px] px-2 py-0.5 rounded-full border uppercase tracking-wider"
+      style={{ borderColor: s.color, color: s.color, background: s.dim }}
+    >
+      {s.label}
+    </span>
+  )
+}
+
 // ─── PROGRESS BAR ─────────────────────────────────────────────────────────────
 export function ProgressBar({ pct, label, subleft, subright }: {
   pct: number; label: string; subleft?: string; subright?: string

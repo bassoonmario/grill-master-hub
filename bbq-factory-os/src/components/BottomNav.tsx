@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Box, History, ShieldCheck, Users, Settings, Store, ClipboardList } from 'lucide-react'
+import { api } from '@/lib/api'
+import { Truck, AlertTriangle, Home, Package, Hammer, Banknote, BarChart3, Box, History, ShieldCheck, Users, Settings, Store, ClipboardList, Bell } from 'lucide-react'
 
 interface NavItem {
   path: string
@@ -20,6 +22,7 @@ const MASTER_ITEMS: NavItem[] = [
   { path: '/master?tab=shipments', icon: Truck,         label: 'Відправки',roles: ['master'] },
   { path: '/master?tab=defects',   icon: AlertTriangle, label: 'Брак',    roles: ['master'] },
   { path: '/master?tab=balance',   icon: Box,           label: 'Баланс',  roles: ['master'] },
+  { path: '/master?tab=notifications', icon: Bell,      label: 'Сповіщення', roles: ['master'] },
 ]
 
 const ADMIN_ITEMS: NavItem[] = [
@@ -42,6 +45,24 @@ export function BottomNav() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
   const { user, loading } = useAuth()
+  const [notifCount, setNotifCount] = useState(0)
+
+  useEffect(() => {
+    if (!user || user.role !== 'master') return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const [alerts, orders] = await Promise.all([
+          user.can_replenish ? api.getReplenishAlerts() : Promise.resolve([]),
+          api.getMasterOfficeOrders(),
+        ])
+        if (!cancelled) setNotifCount(alerts.length + orders.length)
+      } catch { /* ignore */ }
+    }
+    load()
+    const interval = setInterval(load, 20000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [user])
 
   if (loading || !user) {
     return <div className="fixed bottom-0 left-0 right-0 h-[64px] bg-black border-t border-white/5 z-50 flex items-center justify-center">
@@ -53,7 +74,11 @@ export function BottomNav() {
   if (user.role === 'admin') {
     items = ADMIN_ITEMS
   } else if (user.role === 'master') {
-    items = MASTER_ITEMS
+    items = MASTER_ITEMS.map(i =>
+      i.path === '/master?tab=notifications'
+        ? { ...i, badge: notifCount > 0 ? notifCount : undefined }
+        : i
+    )
   } else if (user.role === 'office') {
     items = OFFICE_ITEMS
   } else {

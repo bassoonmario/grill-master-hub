@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { SectionTitle, Spinner, StatusTag, Tabs } from '@/components/UI'
+import { SectionTitle, Spinner, StatusTag, Tabs, PriorityBadge } from '@/components/UI'
 import { api, IncomingTask, ComponentItem } from '@/lib/api'
 import { Plus, ClipboardList, Archive, Send, Package, MessageSquare, AlertCircle, ChevronRight, CheckCircle2, Pencil, Check, X } from 'lucide-react'
 
@@ -79,6 +79,11 @@ export function AdminTasker() {
   loadComponents()
   if (tab === 'active') {
     loadTasks()
+    const interval = setInterval(() => loadTasks(), 15000)
+    return () => clearInterval(interval)
+  }
+  if (tab === 'archive') {
+    loadTasks('архів')
   }
 }, [tab, loadTasks, loadItems, loadComponents])
 
@@ -469,6 +474,7 @@ export function AdminTasker() {
                           {task.is_simple && (
                             <span className="text-[9px] font-mono text-white/20 uppercase bg-white/5 px-2 py-0.5 rounded">текстова</span>
                           )}
+                          <PriorityBadge priority={task.priority} />
                         </div>
                         {task.item_id && task.item_id !== '' ? (
                           <p className="text-white font-mono text-sm">{task.item_id} — <span className="text-[#c9963a]">{task.target_qty} шт</span></p>
@@ -579,12 +585,13 @@ export function AdminTasker() {
                           {task.is_simple && (
                             <span className="text-[9px] font-mono text-white/15 uppercase bg-white/5 px-2 py-0.5 rounded">текстова</span>
                           )}
+                          <PriorityBadge priority={task.priority} />
                         </div>
                         {task.item_id && task.item_id !== '' && (
                           <p className="text-white/50 font-mono text-xs">{task.item_id} — {task.target_qty} шт</p>
                         )}
                         {task.admin_comment && (
-                          <p className="text-white/30 font-mono text-[11px] mt-1 break-words">{task.admin_comment}</p>
+                          <p className={`text-white/30 font-mono text-[11px] mt-1 break-words ${task.is_simple ? 'line-through decoration-white/20' : ''}`}>{task.admin_comment}</p>
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-0.5 flex-shrink-0">

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, DriverTask } from '@/lib/api'
-import { SectionTitle, StatusTag, Spinner, Tabs, EmptyState } from '@/components/UI'
+import { SectionTitle, StatusTag, Spinner, Tabs, EmptyState, PriorityBadge } from '@/components/UI'
 import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Archive } from 'lucide-react'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -59,7 +59,10 @@ export function Tasker() {
     t => t.status !== 'done' && t.status !== 'completed'
   ).length : 0
 
-  const activeTasks  = tasks.filter(t => t.status !== 'done' && t.status !== 'completed')
+  const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2, none: 3 }
+  const activeTasks  = tasks
+    .filter(t => t.status !== 'done' && t.status !== 'completed')
+    .sort((a, b) => (PRIORITY_RANK[a.priority ?? 'none'] ?? 3) - (PRIORITY_RANK[b.priority ?? 'none'] ?? 3))
   const archivedTasks = tasks.filter(t => t.status === 'done' || t.status === 'completed')
 
   const tabs: { key: 'active' | 'done'; label: string; icon: React.ReactNode }[] = [
@@ -189,16 +192,20 @@ function DoneTaskCard({ task }: { task: DriverTask }) {
 function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () => void }) {
   const [loading, setLoading] = useState(false)
   const [err, setErr]         = useState<string | null>(null)
+  const [checked, setChecked] = useState(false)
   const isDone = task.status === 'done' || task.status === 'completed'
 
-  const handleComplete = async () => {
+  const handleCheck = async () => {
+    if (checked || loading) return
     setLoading(true)
     setErr(null)
+    setChecked(true)
     try {
       await api.completeSimpleTask(task.id)
-      onRefresh()
+      setTimeout(onRefresh, 1400)
     } catch {
       setErr('Помилка. Спробуйте ще раз.')
+      setChecked(false)
       setLoading(false)
     }
   }
@@ -206,7 +213,7 @@ function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () =
   return (
     <div
       className="bg-surface border border-border rounded-xl overflow-hidden transition-opacity"
-      style={{ opacity: isDone ? 0.65 : 1 }}
+      style={{ opacity: isDone || checked ? 0.65 : 1 }}
     >
       {/* Header */}
       <div className="flex items-start justify-between px-4 py-3 border-b border-border gap-3">
@@ -217,8 +224,9 @@ function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () =
             style={{ color: 'var(--yellow)', flexShrink: 0 }}
           />
           <div>
-            <div className="font-mono text-[10px] text-[var(--text-dim)] tracking-widest uppercase">
+            <div className="font-mono text-[10px] text-[var(--text-dim)] tracking-widest uppercase flex items-center gap-2">
               Просте доручення · #{task.id}
+              <PriorityBadge priority={task.priority} />
             </div>
             <div className="font-mono text-[10px] text-[var(--text-dim)] mt-0.5">
               {formatDate(task.created_at)}
@@ -228,47 +236,41 @@ function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () =
         <StatusTag type={statusToTag(task.status)} />
       </div>
 
-      {/* Content */}
-      <div className="px-4 py-4">
+      {/* Content + checkbox */}
+      <div className="px-4 py-4 flex items-start gap-3">
+        {!isDone && (
+          <button
+            onClick={handleCheck}
+            disabled={checked || loading}
+            className="mt-0.5 flex-shrink-0 w-6 h-6 rounded-md border-2 flex items-center justify-center transition-all active:scale-90 disabled:cursor-default"
+            style={{
+              borderColor: checked ? 'var(--green)' : 'var(--border)',
+              background:  checked ? 'var(--green)' : 'transparent',
+            }}
+          >
+            {checked && <Check size={14} strokeWidth={3} color="#000" />}
+          </button>
+        )}
         {task.admin_comment ? (
           <p
-            className="text-sm leading-relaxed"
-            style={{ color: 'var(--text)', fontFamily: 'var(--font-body)' }}
+            className="text-sm leading-relaxed transition-all duration-500 flex-1 min-w-0"
+            style={{
+              color: checked ? 'var(--text-dim)' : 'var(--text)',
+              fontFamily: 'var(--font-body)',
+              textDecoration: checked ? 'line-through' : 'none',
+            }}
           >
             {task.admin_comment}
           </p>
         ) : (
-          <p className="text-sm text-[var(--text-dim)] italic">Без коментаря</p>
+          <p className="text-sm text-[var(--text-dim)] italic flex-1">Без коментаря</p>
         )}
       </div>
 
       {/* Error */}
       {err && (
-        <div className="px-4 pb-2 font-mono text-[11px]" style={{ color: 'var(--red)' }}>
+        <div className="px-4 pb-3 font-mono text-[11px]" style={{ color: 'var(--red)' }}>
           {err}
-        </div>
-      )}
-
-      {/* Action */}
-      {!isDone && (
-        <div className="px-4 pb-4">
-          <button
-            onClick={handleComplete}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 font-mono text-[12px] tracking-[2px] py-3 rounded-lg border transition-all active:scale-[0.98] disabled:opacity-50"
-            style={{
-              background:   'var(--green-dim)',
-              borderColor:  'var(--green)',
-              color:        'var(--green)',
-            }}
-          >
-            {loading ? (
-              <RefreshCw size={14} className="animate-spin" />
-            ) : (
-              <Check size={14} strokeWidth={2.5} />
-            )}
-            {loading ? 'ЗБЕРЕЖЕННЯ...' : 'ВИКОНАНО'}
-          </button>
         </div>
       )}
     </div>

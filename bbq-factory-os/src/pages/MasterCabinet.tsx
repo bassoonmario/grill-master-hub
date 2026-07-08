@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem } from '@/lib/api'
-import { SectionTitle, StatCard, Spinner, Card, Tabs } from '@/components/UI'
+import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem, MasterOfficeOrder } from '@/lib/api'
+import { SectionTitle, StatCard, Spinner, Card, Tabs, PriorityBadge, EmptyState } from '@/components/UI'
 import { ShipmentsLog } from '@/components/ShipmentsLog'
-import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus } from 'lucide-react'
+import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus, ClipboardList, MessageSquare } from 'lucide-react'
 
 interface UnifiedStock {
   sku: string
@@ -50,6 +50,9 @@ export function MasterCabinet() {
 
   const [replenishAlerts, setReplenishAlerts] = useState<ReplenishAlert[]>([])
   const [replenishLoading, setReplenishLoading] = useState<Record<number, boolean>>({})
+
+  const [notifSubTab, setNotifSubTab] = useState<'replenish' | 'office'>('replenish')
+  const [officeOrders, setOfficeOrders] = useState<MasterOfficeOrder[]>([])
 
   const parseCategory = (sku: string): string => {
     if (sku.startsWith('MB') || sku.startsWith('MBA')) return 'minibars'
@@ -214,6 +217,25 @@ export function MasterCabinet() {
     }
   }
 
+  const loadOfficeOrders = useCallback(async () => {
+    try {
+      const data = await api.getMasterOfficeOrders()
+      setOfficeOrders(data)
+    } catch { }
+  }, [])
+
+  useEffect(() => {
+    if (tab !== 'notifications') return
+    loadOfficeOrders()
+    const interval = setInterval(loadOfficeOrders, 15000)
+    const onFocus = () => loadOfficeOrders()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [tab, loadOfficeOrders])
+
   const handleConfirmReplenish = async (alertId: number) => {
     setReplenishLoading(prev => ({ ...prev, [alertId]: true }))
     try {
@@ -249,10 +271,23 @@ export function MasterCabinet() {
           </>
         )}
 
-        {/* СЕКЦІЯ ПОПОВНЕННЯ (тільки для can_replenish) */}
-        {tab === 'plan' && user?.can_replenish && replenishAlerts.length > 0 && (
-          <div className="mb-6 space-y-3">
-            <SectionTitle>Поповнення майстерні</SectionTitle>
+        {/* ВКЛАДКА: СПОВІЩЕННЯ */}
+        {tab === 'notifications' && (
+          <div className="space-y-4">
+            <SectionTitle>Сповіщення</SectionTitle>
+            <Tabs
+              tabs={[
+                { key: 'replenish', label: 'Поповнення складу' },
+                { key: 'office',    label: 'Замовлення офісу' },
+              ]}
+              active={notifSubTab}
+              onChange={k => setNotifSubTab(k as 'replenish' | 'office')}
+              variant="underline"
+            />
+
+            {notifSubTab === 'replenish' && (
+              user?.can_replenish && replenishAlerts.length > 0 ? (
+          <div className="space-y-3">
             {replenishAlerts.map(alert => {
               const packs = alert.pcs_per_pack > 1
                 ? Math.round(alert.quantity / alert.pcs_per_pack)
@@ -342,6 +377,47 @@ export function MasterCabinet() {
                 </div>
               )
             })}
+          </div>
+              ) : (
+                <EmptyState icon={<PackagePlus size={36} strokeWidth={1.2} />} text="Немає сповіщень про поповнення" />
+              )
+            )}
+
+            {notifSubTab === 'office' && (
+              officeOrders.length > 0 ? (
+                <div className="space-y-3">
+                  {officeOrders.map(order => (
+                    <div
+                      key={order.id}
+                      className="rounded-xl border overflow-hidden"
+                      style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}
+                    >
+                      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-2.5">
+                          <MessageSquare size={14} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+                          <PriorityBadge priority={order.priority} />
+                        </div>
+                        <span className="font-mono text-[10px]" style={{ color: 'var(--text-dim)' }}>
+                          {order.created_at}
+                        </span>
+                      </div>
+                      <div className="px-4 py-3">
+                        <p className="text-sm leading-relaxed" style={{ color: 'var(--text)' }}>
+                          {order.admin_comment || 'Без коментаря'}
+                        </p>
+                        {order.created_by && (
+                          <p className="font-mono text-[10px] mt-2" style={{ color: 'var(--text-dim)' }}>
+                            від {order.created_by}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState icon={<ClipboardList size={36} strokeWidth={1.2} />} text="Немає замовлень від офісу" />
+              )
+            )}
           </div>
         )}
 
