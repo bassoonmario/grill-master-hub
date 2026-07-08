@@ -1248,11 +1248,15 @@ async def receive_office_stock(body: OfficeStockReceiveBody):
         async with p.acquire() as conn:
             async with conn.transaction():
                 task = await conn.fetchrow(
-                    "SELECT id FROM bot_workshop.incoming_tasks WHERE id = $1 AND source_role = 'office'",
+                    "SELECT id, assignee_role, status FROM bot_workshop.incoming_tasks WHERE id = $1 AND source_role = 'office'",
                     body.task_id
                 )
                 if not task:
                     raise HTTPException(status_code=404, detail="Задача офісу не знайдена")
+                if task['assignee_role'] != 'master':
+                    raise HTTPException(status_code=400, detail="Ця дія доступна лише для тасок майстра")
+                if task['status'] == 'архів':
+                    raise HTTPException(status_code=400, detail="Задача вже підтверджена")
                 for item in body.items:
                     updated = await conn.fetchval("""
                         UPDATE bot_workshop.office_stock

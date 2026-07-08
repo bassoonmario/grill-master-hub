@@ -227,7 +227,7 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
   onClose: () => void
   onDone: () => void
 }) {
-  const canConfirm = task.status === 'прийнято'
+  const canConfirm = task.assignee_role === 'master' && task.status !== 'архів'
   const [items, setItems] = useState<{ item_id: string; qty: string }[]>([{ item_id: '', qty: '' }])
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
