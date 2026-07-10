@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext'
 import { Plus, ClipboardList, Store, Package, Send, AlertCircle, CheckCircle2, ClipboardCheck, Truck, User } from 'lucide-react'
 import type { AssigneeRole, TaskPriority } from '@/lib/api'
 import { OfficeGrillsView } from './OfficeGrillsTab'
+import { OfficePickupTab } from './OfficePickupTab'
 
 type TabKey = 'create' | 'tasks' | 'shop' | 'grills'
 
@@ -29,8 +30,25 @@ export function OfficeCabinet() {
 
       {tab === 'create' && <CreateTaskTab />}
       {tab === 'tasks'  && <TasksTab />}
-      {tab === 'shop'   && <ShopTab />}
+      {tab === 'shop'   && <OfficeShopSection />}
       {tab === 'grills' && <OfficeGrillsView />}
+    </div>
+  )
+}
+
+// ─── МАГАЗИН: САМОВИВОЗИ / ТАБЛИЦЯ ──────────────────────────────────────────
+
+function OfficeShopSection() {
+  const [subTab, setSubTab] = useState<'pickup' | 'table'>('pickup')
+  const subTabs = [
+    { key: 'pickup', label: 'Самовивози' },
+    { key: 'table',  label: 'Таблиця магазину' },
+  ]
+  return (
+    <div>
+      <Tabs tabs={subTabs} active={subTab} onChange={k => setSubTab(k as 'pickup' | 'table')} variant="underline" />
+      {subTab === 'pickup' && <OfficePickupTab />}
+      {subTab === 'table'  && <ShopTab />}
     </div>
   )
 }
@@ -369,7 +387,13 @@ function ShopTab() {
             <button
               onClick={() => startEdit(row)}
               className="text-left font-mono text-xs"
-              style={{ color: row.quantity <= row.min_qty ? 'var(--red)' : undefined }}
+              style={{
+                color: row.quantity <= row.min_qty
+                  ? 'var(--red)'
+                  : row.quantity <= row.min_qty * 1.5
+                    ? 'var(--yellow)'
+                    : undefined
+              }}
             >
               {row.quantity}
             </button>

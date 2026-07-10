@@ -70,6 +70,7 @@ export interface StockItem {
   status: 'ok' | 'low' | 'critical'
   category: 'main' | 'ready' | 'operative' | 'cases' | 'cases_empty' | 'finished_main' | 'finished_main_engraved' | 'finished' | 'loot_box_operative' | 'loot_box_main'
   min_limit?: number
+  max_limit?: number
   unit_type?: string
   conversion_factor?: number
 }
@@ -345,7 +346,32 @@ export interface OfficeStockRow {
   item_id: string
   quantity: number
   min_qty: number
+  max_qty: number
   last_delivery_date: string | null
+}
+
+export interface PickupOrderItem {
+  article: string
+  quantity: number
+}
+
+export interface PickupReservation {
+  source_table: string
+  item_id: string
+  reserved_qty: number
+  article: string | null
+}
+
+export interface PickupOrder {
+  id: number
+  source: string
+  source_order_id: string
+  client_name: string | null
+  phone: string | null
+  items: PickupOrderItem[]
+  status: string
+  reserved_at: string
+  reservations: PickupReservation[]
 }
 
 // ─── API METHODS ─────────────────────────────────────────────────────────────
@@ -644,9 +670,15 @@ export const api = {
   getOfficeStock: (): Promise<OfficeStockRow[]> =>
     get<OfficeStockRow[]>('/api/office/stock'),
 
-  updateOfficeStock: (item_id: string, new_quantity: number) =>
-    patch<{ item_id: string; quantity: number }>('/api/office/stock', { item_id, new_quantity }),
+  updateOfficeStock: (item_id: string, new_quantity: number, max_qty?: number) =>
+    patch<{ item_id: string; quantity: number }>('/api/office/stock', { item_id, new_quantity, max_qty }),
 
   receiveOfficeStock: (task_id: number, items: { item_id: string; qty: number }[]) =>
     post<{ status: string }>('/api/office/stock/receive', { task_id, items }),
+
+  getActivePickupOrders: (): Promise<PickupOrder[]> =>
+    get<PickupOrder[]>('/api/pickup/active'),
+
+  setPickupSource: (pickup_order_id: number, article: string, source_table: string, tid: number) =>
+    patch<{ status: string }>(`/api/pickup/${pickup_order_id}/source`, { article, source_table, tid }),
 }

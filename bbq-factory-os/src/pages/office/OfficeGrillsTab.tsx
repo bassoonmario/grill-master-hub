@@ -9,6 +9,8 @@ interface GrillRow {
   cases_empty: number
   ready: number
   finished_main: number
+  finished_main_min?: number
+  finished_main_max?: number
 }
 
 export function OfficeGrillsView() {
@@ -30,7 +32,11 @@ export function OfficeGrillsView() {
         const entry = grillsMap.get(i.sku)!
         if (i.category === 'cases_empty') entry.cases_empty = i.qty
         if (i.category === 'ready') entry.ready = i.qty
-        if (i.category === 'finished_main') entry.finished_main = i.qty
+        if (i.category === 'finished_main') {
+          entry.finished_main = i.qty
+          entry.finished_main_min = i.min_limit
+          entry.finished_main_max = i.max_limit
+        }
       }
       setRows(Array.from(grillsMap.values()).sort((a, b) => a.name.localeCompare(b.name)))
     } catch (e) {
@@ -99,8 +105,16 @@ export function OfficeGrillsView() {
               <span className="w-8"></span>
             </div>
             <div className="divide-y divide-white/5">
-              {rows.map(row => (
-                <div key={row.sku} className="grid grid-cols-[1.5fr_1fr_1fr_1fr_auto] gap-2 p-3 items-center hover:bg-white/5 transition-colors">
+              {rows.map(row => {
+                const mid = row.finished_main_min !== undefined && row.finished_main_max !== undefined
+                  ? (row.finished_main_min + row.finished_main_max) / 2
+                  : undefined
+                const isCritical = row.finished_main_min !== undefined && row.finished_main < row.finished_main_min
+                const isLow = !isCritical && mid !== undefined && row.finished_main < mid
+                const rowBg = isCritical ? 'bg-red-900/20' : isLow ? 'bg-yellow-900/20' : ''
+                const finishedMainColor = isCritical ? 'text-red-400' : isLow ? 'text-yellow-400' : 'text-[#c9963a]'
+                return (
+                <div key={row.sku} className={`grid grid-cols-[1.5fr_1fr_1fr_1fr_auto] gap-2 p-3 items-center hover:bg-white/5 transition-colors ${rowBg}`}>
                   <span className="text-sm font-mono text-white/80 break-words">{row.name}</span>
                   {editingSku === row.sku ? (
                     <>
@@ -116,12 +130,13 @@ export function OfficeGrillsView() {
                     <>
                       <span className="text-[#c9963a] font-mono text-sm text-center">{row.cases_empty}</span>
                       <span className="text-[#c9963a] font-mono text-sm text-center">{row.ready}</span>
-                      <span className="text-[#c9963a] font-mono text-sm text-center">{row.finished_main}</span>
+                      <span className={`font-mono text-sm text-center ${finishedMainColor}`}>{row.finished_main}</span>
                       <button onClick={() => startEdit(row)} className="p-1.5 text-white/30 hover:text-[#c9963a] transition-colors"><Pencil className="w-3.5 h-3.5" /></button>
                     </>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
