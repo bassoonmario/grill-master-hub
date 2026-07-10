@@ -168,7 +168,7 @@ async def test_pickup_reservations_schema(conn):
         WHERE table_schema = 'bot_workshop' AND table_name = 'pickup_reservations'
     """)
     cols = {r['column_name'] for r in rows}
-    required = {'id', 'pickup_order_id', 'source_table', 'item_id', 'reserved_qty', 'created_at'}
+    required = {'id', 'pickup_order_id', 'source_table', 'item_id', 'reserved_qty', 'article', 'created_at'}
     assert required <= cols, f"Відсутні колонки в pickup_reservations: {cols}"
 
     fk_exists = await conn.fetchval("""

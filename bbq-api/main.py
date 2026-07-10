@@ -206,6 +206,11 @@ class PickupReserveBody(BaseModel):
     phone: Optional[str] = None
     items: List[PickupItem]
 
+class PickupSourceBody(BaseModel):
+    article: str
+    source_table: Literal['office_stock', 'finished', 'components']
+    tid: int
+
 class OfficeTaskCreate(BaseModel):
     admin_comment: str
     created_by: Optional[str] = None
@@ -215,6 +220,7 @@ class OfficeTaskCreate(BaseModel):
 class OfficeStockUpdate(BaseModel):
     item_id: str
     new_quantity: int
+    max_qty: Optional[int] = None
 
 class OfficeStockReceiveItem(BaseModel):
     item_id: str
@@ -262,7 +268,7 @@ async def get_stock():
     try:
         rows = await p.fetch("""
             SELECT item_id::text, item_name AS name, quantity::float,
-                min_limit::float, NULL::text AS unit_type, NULL::float AS conversion_factor,
+                min_limit::float, NULL::float AS max_limit, NULL::text AS unit_type, NULL::float AS conversion_factor,
                 CASE
                     WHEN min_limit IS NULL         THEN 'ok'
                     WHEN quantity <= 0             THEN 'critical'
@@ -273,15 +279,23 @@ async def get_stock():
             FROM bot_workshop.inventory_main
 
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'finished' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float,
+                min_limit::float, max_limit::float, NULL::text, NULL::float,
+                CASE
+                    WHEN min_limit IS NULL OR min_limit = 0 THEN 'ok'
+                    WHEN quantity <= 0             THEN 'critical'
+                    WHEN quantity <= min_limit     THEN 'critical'
+                    WHEN quantity <= min_limit*1.5 THEN 'low'
+                    ELSE 'ok'
+                END AS status, 'finished' AS category
             FROM bot_workshop.inventory_finished
 
             UNION ALL
-            SELECT item_id::text, item_name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'operative' AS category
+            SELECT item_id::text, item_name, quantity::float, NULL::float, NULL::float, NULL::text, NULL::float, 'ok' AS status, 'operative' AS category
             FROM bot_workshop.inventory_operative
 
             UNION ALL
-            SELECT id::text AS item_id, component_name AS name, quantity::float, min_threshold::float AS min_limit,
+            SELECT id::text AS item_id, component_name AS name, quantity::float, min_threshold::float AS min_limit, NULL::float AS max_limit,
                 unit_type, conversion_factor,
                 CASE
                     WHEN min_threshold IS NULL         THEN 'ok'
@@ -293,17 +307,25 @@ async def get_stock():
             FROM bot_workshop.cases_components
 
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, min_limit::float, NULL::text, NULL::float, 'ok' AS status, 'cases_empty' AS category
+            SELECT item_id::text, item_id::text AS name, quantity::float, min_limit::float, NULL::float AS max_limit, NULL::text, NULL::float, 'ok' AS status, 'cases_empty' AS category
             FROM bot_workshop.inventory_cases
 
             UNION ALL
-            SELECT item_id::text, item_id::text AS name, quantity::float, NULL::float, NULL::text, NULL::float, 'ok' AS status,
+            SELECT item_id::text, item_id::text AS name, quantity::float,
+                min_limit::float, max_limit::float, NULL::text, NULL::float,
+                CASE
+                    WHEN min_limit IS NULL OR min_limit = 0 THEN 'ok'
+                    WHEN quantity <= 0             THEN 'critical'
+                    WHEN quantity <= min_limit     THEN 'critical'
+                    WHEN quantity <= min_limit*1.5 THEN 'low'
+                    ELSE 'ok'
+                END AS status,
                 CASE WHEN is_engraved THEN 'finished_main' ELSE 'finished_main_engraved' END AS category
             FROM bot_workshop.inventory_finished_main
 
             UNION ALL
             SELECT item_id::text, item_name AS name, quantity::float,
-                min_limit::float, NULL::text AS unit_type, NULL::float AS conversion_factor,
+                min_limit::float, NULL::float AS max_limit, NULL::text AS unit_type, NULL::float AS conversion_factor,
                 CASE
                     WHEN min_limit IS NULL         THEN 'ok'
                     WHEN quantity <= 0             THEN 'critical'
@@ -314,7 +336,7 @@ async def get_stock():
             FROM bot_workshop.loot_box_main
 
             UNION ALL
-            SELECT item_id::text, item_name, quantity::float, min_limit::float,
+            SELECT item_id::text, item_name, quantity::float, min_limit::float, NULL::float AS max_limit,
                 NULL::text, NULL::float,
                 CASE
                     WHEN min_limit IS NULL         THEN 'ok'
@@ -488,6 +510,11 @@ async def get_shipments_admin():
 # для звичайних відправок (не роль, конкретні tid). Фронтенд ховає контрол,
 # бекенд тут — друга лінія захисту (див. відоме обмеження нижче).
 SHIPMENT_SOURCE_OVERRIDE_WHITELIST = {417930, 397956}
+
+# Іван — офісний override джерела резерву самовивозу (не роль, конкретний tid).
+# Той самий патерн і те саме застереження, що й SHIPMENT_SOURCE_OVERRIDE_WHITELIST
+# вище: не справжня авторизація, друга лінія захисту від випадкового використання.
+PICKUP_OVERRIDE_TIDS = {334029}
 
 @app.patch("/api/master/shipments/source")
 async def set_shipment_source(body: ShipmentSourceBody):
@@ -1211,7 +1238,7 @@ async def get_office_stock():
     p = await get_pool()
     try:
         rows = await p.fetch("""
-            SELECT item_id, quantity, min_qty,
+            SELECT item_id, quantity, min_qty, max_qty,
                    to_char(last_delivery_date, 'DD.MM.YY HH24:MI') AS last_delivery_date
             FROM bot_workshop.office_stock
             ORDER BY item_id
@@ -1226,10 +1253,11 @@ async def update_office_stock(body: OfficeStockUpdate):
     p = await get_pool()
     try:
         row = await p.fetchrow("""
-            UPDATE bot_workshop.office_stock SET quantity = $1
-            WHERE item_id = $2
+            UPDATE bot_workshop.office_stock
+            SET quantity = $1, max_qty = COALESCE($2, max_qty)
+            WHERE item_id = $3
             RETURNING item_id, quantity
-        """, body.new_quantity, body.item_id)
+        """, body.new_quantity, body.max_qty, body.item_id)
         if not row:
             raise HTTPException(status_code=404, detail="Артикул не знайдено в office_stock")
         return dict(row)
@@ -2145,6 +2173,17 @@ async def run_write_off(dry_run: bool = False):
     return {"success": True, "written_off_count": len(details), "errors": errors, "details": details}
 
 
+def _normalize_article(article: str) -> tuple:
+    raw_article = article.strip().upper()
+    norm_article = raw_article
+    if len(raw_article) <= 5:
+        norm_article = raw_article.replace('С', 'S')
+    base_article = norm_article
+    if not norm_article.startswith('T1'):
+        base_article = norm_article.replace('H', '').replace('T', '')
+    return raw_article, base_article
+
+
 async def _resolve_wholesale_components(conn, article: str, qty: float, skip_finished: bool = False) -> list:
     """
     Розкладає позицію опт-замовлення на резерви по джерелах — та сама каскадна
@@ -2175,12 +2214,8 @@ async def _resolve_wholesale_components(conn, article: str, qty: float, skip_fin
         result.append({'source_table': 'operative', 'item_id': DIRECT_OPERATIVE[raw_article], 'qty': qty})
         return result
 
-    norm_article = raw_article
-    if len(raw_article) <= 5:
-        norm_article = raw_article.replace('С', 'S')
-    base_article = norm_article
-    if not norm_article.startswith('T1'):
-        base_article = norm_article.replace('H', '').replace('T', '')
+    raw_article, base_article = _normalize_article(article)
+    norm_article = raw_article.replace('С', 'S') if len(raw_article) <= 5 else raw_article
 
     from_finished = 0
     if not skip_finished:
@@ -2224,6 +2259,31 @@ async def _resolve_wholesale_components(conn, article: str, qty: float, skip_fin
             for ing in loot_recipe:
                 result.append({'source_table': 'operative', 'item_id': ing['item_id'], 'qty': ing['quantity'] * remaining})
 
+    return result
+
+
+async def _resolve_pickup_components(conn, article: str, qty: float) -> list:
+    """
+    Самовивіз-варіант _resolve_wholesale_components: спершу пробує office_stock
+    (офісний запас, найшвидше джерело для видачі на місці), решту віддає
+    в той самий каскад (finished → cases+recipe / recipe / recipes_lootbox).
+    Wholesale-резерв цей office_stock-крок не використовує.
+    """
+    result = []
+    _, base_article = _normalize_article(article)
+    office_row = await conn.fetchrow(
+        "SELECT quantity FROM bot_workshop.office_stock WHERE item_id = $1", base_article
+    )
+    office_qty = office_row['quantity'] if office_row else 0
+    from_office = min(office_qty, qty) if office_qty > 0 else 0
+    if from_office > 0:
+        result.append({'source_table': 'office_stock', 'item_id': base_article, 'qty': from_office})
+
+    remaining = qty - from_office
+    if remaining <= 0:
+        return result
+
+    result.extend(await _resolve_wholesale_components(conn, article, remaining))
     return result
 
 
@@ -2583,13 +2643,13 @@ async def pickup_reserve(body: PickupReserveBody):
                 order_id = order_row['id']
 
                 for item in body.items:
-                    components = await _resolve_wholesale_components(conn, item.article, item.quantity)
+                    components = await _resolve_pickup_components(conn, item.article, item.quantity)
                     for comp in components:
                         await conn.execute("""
                             INSERT INTO bot_workshop.pickup_reservations
-                                (pickup_order_id, source_table, item_id, reserved_qty)
-                            VALUES ($1, $2, $3, $4)
-                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'])
+                                (pickup_order_id, source_table, item_id, reserved_qty, article)
+                            VALUES ($1, $2, $3, $4, $5)
+                        """, order_id, comp['source_table'], comp['item_id'], comp['qty'], item.article)
 
         return {"id": order_id}
     except ValueError as e:
@@ -2632,6 +2692,11 @@ async def pickup_writeoff(pickup_order_id: int):
                     if source_table == 'finished':
                         await conn.execute(
                             "UPDATE bot_workshop.inventory_finished SET quantity = quantity - $1 WHERE item_id = $2",
+                            qty, item_id
+                        )
+                    elif source_table == 'office_stock':
+                        await conn.execute(
+                            "UPDATE bot_workshop.office_stock SET quantity = quantity - $1 WHERE item_id = $2",
                             qty, item_id
                         )
                     elif source_table == 'cases':
@@ -2726,6 +2791,91 @@ async def pickup_release(pickup_order_id: int):
         raise
     except Exception as e:
         print(f"Error in POST /api/pickup/release/{pickup_order_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/pickup/active")
+async def get_active_pickup_orders():
+    p = await get_pool()
+    try:
+        orders = await p.fetch("""
+            SELECT id, source, source_order_id, client_name, phone, items, status, reserved_at
+            FROM bot_workshop.pickup_orders WHERE status = 'reserved' ORDER BY reserved_at
+        """)
+        reservations = await p.fetch("""
+            SELECT pickup_order_id, source_table, item_id, reserved_qty, article
+            FROM bot_workshop.pickup_reservations
+        """)
+        return [
+            {**dict(o), 'items': json.loads(o['items']),
+             'reservations': [dict(r) for r in reservations if r['pickup_order_id'] == o['id']]}
+            for o in orders
+        ]
+    except Exception as e:
+        print(f"Error in GET /api/pickup/active: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/pickup/{pickup_order_id}/source")
+async def set_pickup_source(pickup_order_id: int, body: PickupSourceBody):
+    if body.tid not in PICKUP_OVERRIDE_TIDS:
+        raise HTTPException(status_code=403, detail="Немає доступу до цієї функції")
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                order = await conn.fetchrow("""
+                    SELECT id, items, status FROM bot_workshop.pickup_orders WHERE id = $1
+                """, pickup_order_id)
+                if not order:
+                    raise HTTPException(status_code=404, detail="Самовивіз-замовлення не знайдено")
+                if order['status'] != 'reserved':
+                    raise HTTPException(status_code=400, detail="Змінити джерело можна лише для замовлень у статусі 'reserved'")
+
+                items = json.loads(order['items'])
+                line = next((it for it in items if it.get('article') == body.article), None)
+                if not line:
+                    raise HTTPException(status_code=404, detail=f"Позицію {body.article} не знайдено в замовленні")
+                qty = float(line['quantity'])
+                _, base_article = _normalize_article(body.article)
+
+                if body.source_table == 'office_stock':
+                    row = await conn.fetchrow(
+                        "SELECT quantity FROM bot_workshop.office_stock WHERE item_id = $1", base_article
+                    )
+                    available = row['quantity'] if row else 0
+                    if qty > available:
+                        raise HTTPException(status_code=400, detail=f"На office_stock недостатньо ({available})")
+                    new_rows = [{'source_table': 'office_stock', 'item_id': base_article, 'qty': qty}]
+                elif body.source_table == 'finished':
+                    row = await conn.fetchrow(
+                        "SELECT quantity FROM bot_workshop.inventory_finished WHERE item_id = $1", base_article
+                    )
+                    available = row['quantity'] if row else 0
+                    if qty > available:
+                        raise HTTPException(status_code=400, detail=f"На inventory_finished недостатньо ({available})")
+                    new_rows = [{'source_table': 'finished', 'item_id': base_article, 'qty': qty}]
+                else:  # 'components' — перерахунок рецепту, skip_finished щоб не тягнути мовчки з 'finished'
+                    new_rows = await _resolve_wholesale_components(conn, body.article, qty, skip_finished=True)
+
+                await conn.execute(
+                    "DELETE FROM bot_workshop.pickup_reservations WHERE pickup_order_id = $1 AND article = $2",
+                    pickup_order_id, body.article
+                )
+                for r in new_rows:
+                    await conn.execute("""
+                        INSERT INTO bot_workshop.pickup_reservations
+                            (pickup_order_id, source_table, item_id, reserved_qty, article)
+                        VALUES ($1, $2, $3, $4, $5)
+                    """, pickup_order_id, r['source_table'], r['item_id'], r['qty'], body.article)
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"Error in PATCH /api/pickup/{pickup_order_id}/source: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

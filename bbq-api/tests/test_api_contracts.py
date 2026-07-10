@@ -9,7 +9,7 @@
 
 # ── Контракт GET /api/stock ───────────────────────────────────────────────────
 
-EXPECTED_STOCK_FIELDS = {'item_id', 'name', 'quantity', 'min_limit', 'unit_type', 'conversion_factor', 'status', 'category'}
+EXPECTED_STOCK_FIELDS = {'item_id', 'name', 'quantity', 'min_limit', 'max_limit', 'unit_type', 'conversion_factor', 'status', 'category'}
 
 EXPECTED_STOCK_STATUSES = {'ok', 'low', 'critical'}
 
