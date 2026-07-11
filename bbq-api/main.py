@@ -216,6 +216,9 @@ class OfficeTaskCreate(BaseModel):
     created_by: Optional[str] = None
     assignee_role: Literal['driver', 'master'] = 'driver'
     priority: Literal['none', 'low', 'medium', 'high'] = 'none'
+    task_variant: Literal['receive', 'simple'] = 'receive'
+    due_date: Optional[str] = None
+    component_ref: Optional[str] = None
 
 class OfficeStockUpdate(BaseModel):
     item_id: str
@@ -1166,12 +1169,14 @@ async def get_packaging_rules(item_id: str):
 async def create_office_task(body: OfficeTaskCreate):
     p = await get_pool()
     try:
+        # component_ref має сенс лише для 'simple' — для 'receive' (старий тип) ігноруємо
+        component_ref = body.component_ref if body.task_variant == 'simple' else None
         new_id = await p.fetchval("""
             INSERT INTO bot_workshop.incoming_tasks
-                (item_id, target_qty, status, admin_comment, is_simple, task_type, source_role, created_by, assignee_role, priority)
-            VALUES ('', 0, 'очікується', $1, true, 'simple', 'office', $2, $3, $4)
+                (item_id, target_qty, status, admin_comment, is_simple, task_type, source_role, created_by, assignee_role, priority, due_date, component_ref)
+            VALUES ('', 0, 'очікується', $1, true, 'simple', 'office', $2, $3, $4, $5, $6)
             RETURNING id
-        """, body.admin_comment, body.created_by, body.assignee_role, body.priority)
+        """, body.admin_comment, body.created_by, body.assignee_role, body.priority, body.due_date, component_ref)
         return {"status": "created", "id": new_id}
     except Exception as e:
         print(f"Error in POST /api/office/tasks: {e}")
@@ -1183,6 +1188,7 @@ async def get_office_tasks():
     try:
         rows = await p.fetch("""
             SELECT id, admin_comment, status, created_by, priority, assignee_role,
+                   component_ref, to_char(due_date, 'DD.MM.YY') AS due_date,
                    to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
                    to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at
             FROM bot_workshop.incoming_tasks
@@ -1197,6 +1203,20 @@ async def get_office_tasks():
         return [dict(r) for r in rows]
     except Exception as e:
         print(f"Error in GET /api/office/tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/office/inventory-operative-options")
+async def get_office_inventory_operative_options():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT item_id, COALESCE(display_name, item_name) AS label
+            FROM bot_workshop.inventory_operative
+            ORDER BY item_name
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/office/inventory-operative-options: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/office/pending-orders")
@@ -1567,7 +1587,7 @@ async def get_driver_tasks():
         rows = await p.fetch("""
             SELECT it.id, it.item_id, it.target_qty, it.actual_qty, it.status,
                    it.admin_comment, it.driver_comment, it.is_simple, it.created_at,
-                   it.task_type, it.priority,
+                   it.task_type, it.priority, to_char(it.due_date, 'DD.MM.YY') AS due_date,
                    it.component_id, it.input_qty, it.unit_type, it.conversion_factor,
                    pr.pcs_per_pack, pr.packs_per_box, pr.pcs_per_box
             FROM bot_workshop.incoming_tasks it
@@ -1682,12 +1702,15 @@ async def get_items_components():
 async def complete_simple_task(task_id: int):
     p = await get_pool()
     try:
-        task = await p.fetchrow("SELECT is_simple, assignee_role FROM bot_workshop.incoming_tasks WHERE id = $1", task_id)
+        task = await p.fetchrow("SELECT is_simple, assignee_role, component_ref FROM bot_workshop.incoming_tasks WHERE id = $1", task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Задачу не знайдено")
         if not task['is_simple']:
             raise HTTPException(status_code=400, detail="Одноклікове завершення доступне лише для простих завдань")
-        if task['assignee_role'] != 'driver':
+        if task['assignee_role'] == 'master':
+            if task['component_ref'] is None:
+                raise HTTPException(status_code=400, detail="Це завдання типу 'отримання' — підтвердіть через прийом на склад")
+        elif task['assignee_role'] != 'driver':
             raise HTTPException(status_code=400, detail="Це завдання призначене не водію")
 
         row = await p.fetchrow("""
@@ -1723,6 +1746,21 @@ async def get_replenish_alerts():
         print(f"Error in GET /api/master/replenish-alerts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/master/office-stock-alerts")
+async def get_office_stock_alerts():
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT item_id, quantity, min_qty
+            FROM bot_workshop.office_stock
+            WHERE min_qty > 0 AND quantity <= min_qty
+            ORDER BY quantity ASC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/master/office-stock-alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/master/replenish/{alert_id}/confirm")
 async def confirm_replenish(alert_id: int):
     p = await get_pool()
@@ -1755,7 +1793,8 @@ async def get_driver_tasks_done():
     try:
         rows = await p.fetch("""
             SELECT id, item_id, target_qty, actual_qty, status, admin_comment,
-                   driver_comment, is_simple, created_at, completed_at, priority
+                   driver_comment, is_simple, created_at, completed_at, priority,
+                   to_char(due_date, 'DD.MM.YY') AS due_date
             FROM bot_workshop.incoming_tasks
             WHERE status = 'прийнято' AND COALESCE(assignee_role, 'driver') != 'master'
             ORDER BY completed_at DESC

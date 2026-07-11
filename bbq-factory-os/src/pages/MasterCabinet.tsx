@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem, MasterOfficeOrder } from '@/lib/api'
+import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem, MasterOfficeOrder, OfficeStockAlert } from '@/lib/api'
 import { SectionTitle, StatCard, Spinner, Card, Tabs, PriorityBadge, EmptyState } from '@/components/UI'
 import { ShipmentsLog } from '@/components/ShipmentsLog'
-import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus, ClipboardList, MessageSquare } from 'lucide-react'
+import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus, ClipboardList, MessageSquare, Store } from 'lucide-react'
 
 interface UnifiedStock {
   sku: string
@@ -51,8 +51,9 @@ export function MasterCabinet() {
   const [replenishAlerts, setReplenishAlerts] = useState<ReplenishAlert[]>([])
   const [replenishLoading, setReplenishLoading] = useState<Record<number, boolean>>({})
 
-  const [notifSubTab, setNotifSubTab] = useState<'replenish' | 'office'>('replenish')
+  const [notifSubTab, setNotifSubTab] = useState<'replenish' | 'office' | 'stock'>('replenish')
   const [officeOrders, setOfficeOrders] = useState<MasterOfficeOrder[]>([])
+  const [officeStockAlerts, setOfficeStockAlerts] = useState<OfficeStockAlert[]>([])
 
   const parseCategory = (sku: string): string => {
     if (sku.startsWith('MB') || sku.startsWith('MBA')) return 'minibars'
@@ -224,17 +225,25 @@ export function MasterCabinet() {
     } catch { }
   }, [])
 
+  const loadOfficeStockAlerts = useCallback(async () => {
+    try {
+      const data = await api.getOfficeStockAlerts()
+      setOfficeStockAlerts(data)
+    } catch { }
+  }, [])
+
   useEffect(() => {
     if (tab !== 'notifications') return
     loadOfficeOrders()
-    const interval = setInterval(loadOfficeOrders, 15000)
-    const onFocus = () => loadOfficeOrders()
+    loadOfficeStockAlerts()
+    const interval = setInterval(() => { loadOfficeOrders(); loadOfficeStockAlerts() }, 15000)
+    const onFocus = () => { loadOfficeOrders(); loadOfficeStockAlerts() }
     window.addEventListener('focus', onFocus)
     return () => {
       clearInterval(interval)
       window.removeEventListener('focus', onFocus)
     }
-  }, [tab, loadOfficeOrders])
+  }, [tab, loadOfficeOrders, loadOfficeStockAlerts])
 
   const handleConfirmReplenish = async (alertId: number) => {
     setReplenishLoading(prev => ({ ...prev, [alertId]: true }))
@@ -279,9 +288,10 @@ export function MasterCabinet() {
               tabs={[
                 { key: 'replenish', label: 'Поповнення складу' },
                 { key: 'office',    label: 'Замовлення офісу' },
+                { key: 'stock',     label: 'Магазин офісу' },
               ]}
               active={notifSubTab}
-              onChange={k => setNotifSubTab(k as 'replenish' | 'office')}
+              onChange={k => setNotifSubTab(k as 'replenish' | 'office' | 'stock')}
               variant="underline"
             />
 
@@ -416,6 +426,49 @@ export function MasterCabinet() {
                 </div>
               ) : (
                 <EmptyState icon={<ClipboardList size={36} strokeWidth={1.2} />} text="Немає замовлень від офісу" />
+              )
+            )}
+
+            {notifSubTab === 'stock' && (
+              officeStockAlerts.length > 0 ? (
+                <div className="space-y-3">
+                  {officeStockAlerts.map(item => (
+                    <div
+                      key={item.item_id}
+                      className="rounded-xl border overflow-hidden"
+                      style={{ borderColor: 'var(--border)', background: 'var(--surface2)' }}
+                    >
+                      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                        <div className="flex items-center gap-2.5">
+                          <Store size={14} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+                          <span className="font-semibold text-sm" style={{ color: 'var(--text)' }}>
+                            {item.item_id}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="px-4 py-3 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                            Зараз в магазині офісу
+                          </span>
+                          <span className="font-mono text-[12px]" style={{ color: 'var(--text-dim)' }}>
+                            {item.quantity} шт
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="font-mono text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+                            Довезти
+                          </span>
+                          <span className="font-display text-base" style={{ color: 'var(--orange)' }}>
+                            {item.min_qty - item.quantity} шт
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState icon={<Store size={36} strokeWidth={1.2} />} text="Магазин офісу в нормі" />
               )
             )}
           </div>

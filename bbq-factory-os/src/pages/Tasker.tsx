@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, DriverTask } from '@/lib/api'
 import { SectionTitle, StatusTag, Spinner, Tabs, EmptyState, PriorityBadge } from '@/components/UI'
-import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Archive } from 'lucide-react'
+import { TaskLinkPreview } from '@/components/TaskLinkPreview'
+import { Check, ChevronDown, Truck, ClipboardCheck, RefreshCw, ClipboardList, Archive, CalendarClock } from 'lucide-react'
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
@@ -228,8 +229,13 @@ function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () =
               Просте доручення · #{task.id}
               <PriorityBadge priority={task.priority} />
             </div>
-            <div className="font-mono text-[10px] text-[var(--text-dim)] mt-0.5">
+            <div className="font-mono text-[10px] text-[var(--text-dim)] mt-0.5 flex items-center gap-2">
               {formatDate(task.created_at)}
+              {task.due_date && (
+                <span className="flex items-center gap-1" style={{ color: 'var(--orange)' }}>
+                  <CalendarClock size={10} /> до {task.due_date}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -252,16 +258,15 @@ function SimpleTaskCard({ task, onRefresh }: { task: DriverTask; onRefresh: () =
           </button>
         )}
         {task.admin_comment ? (
-          <p
+          <TaskLinkPreview
+            text={task.admin_comment}
             className="text-sm leading-relaxed transition-all duration-500 flex-1 min-w-0"
             style={{
               color: checked ? 'var(--text-dim)' : 'var(--text)',
               fontFamily: 'var(--font-body)',
               textDecoration: checked ? 'line-through' : 'none',
             }}
-          >
-            {task.admin_comment}
-          </p>
+          />
         ) : (
           <p className="text-sm text-[var(--text-dim)] italic flex-1">Без коментаря</p>
         )}
@@ -375,8 +380,13 @@ function DeliveryTaskCard({
             >
               {task.item_id}
             </div>
-            <div className="font-mono text-[10px] text-[var(--text-dim)] mt-0.5">
+            <div className="font-mono text-[10px] text-[var(--text-dim)] mt-0.5 flex items-center gap-2">
               #{task.id} · {formatDate(task.created_at)}
+              {task.due_date && (
+                <span className="flex items-center gap-1" style={{ color: 'var(--orange)' }}>
+                  <CalendarClock size={10} /> до {task.due_date}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -428,7 +438,7 @@ function DeliveryTaskCard({
             }}
           >
             <span style={{ color: 'var(--yellow)' }}>Коментар: </span>
-            {task.admin_comment}
+            <TaskLinkPreview text={task.admin_comment} />
           </div>
         )}
       </div>

@@ -253,6 +253,7 @@ export interface DriverTask {
   unit_type?: string
   conversion_factor?: number
   priority?: TaskPriority
+  due_date?: string | null
 }
 
 export interface ReplenishAlert {
@@ -263,6 +264,12 @@ export interface ReplenishAlert {
   current_qty: number
   pcs_per_pack: number
   packs_per_box: number
+}
+
+export interface OfficeStockAlert {
+  item_id: string
+  quantity: number
+  min_qty: number
 }
 
 export interface PackagingRules {
@@ -331,6 +338,15 @@ export interface OfficeTask {
   created_by: string | null
   priority: TaskPriority
   assignee_role: AssigneeRole
+  component_ref: string | null
+  due_date: string | null
+}
+
+export type OfficeTaskVariant = 'receive' | 'simple'
+
+export interface InventoryOperativeOption {
+  item_id: string
+  label: string
 }
 
 export interface MasterOfficeOrder {
@@ -602,6 +618,9 @@ export const api = {
   getReplenishAlerts: (): Promise<ReplenishAlert[]> =>
     get<ReplenishAlert[]>('/api/master/replenish-alerts'),
 
+  getOfficeStockAlerts: (): Promise<OfficeStockAlert[]> =>
+    get<OfficeStockAlert[]>('/api/master/office-stock-alerts'),
+
   confirmReplenish: (alertId: number) =>
     post<{ status: string }>(`/api/master/replenish/${alertId}/confirm`, {}),
 
@@ -655,11 +674,24 @@ export const api = {
     patch<{ updated: number }>('/api/admin/recipes/lootbox', { box_id, item_id, quantity }),
 
   // ─── OFFICE API ─────────────────────────────────────────────────────────────
-  createOfficeTask: (admin_comment: string, created_by?: string, assignee_role?: AssigneeRole, priority?: TaskPriority) =>
-    post<{ status: string; id: number }>('/api/office/tasks', { admin_comment, created_by, assignee_role, priority }),
+  createOfficeTask: (
+    admin_comment: string,
+    created_by?: string,
+    assignee_role?: AssigneeRole,
+    priority?: TaskPriority,
+    task_variant?: OfficeTaskVariant,
+    due_date?: string,
+    component_ref?: string,
+  ) =>
+    post<{ status: string; id: number }>('/api/office/tasks', {
+      admin_comment, created_by, assignee_role, priority, task_variant, due_date, component_ref,
+    }),
 
   getOfficeTasks: (): Promise<OfficeTask[]> =>
     get<OfficeTask[]>('/api/office/tasks'),
+
+  getOfficeInventoryOperativeOptions: (): Promise<InventoryOperativeOption[]> =>
+    get<InventoryOperativeOption[]>('/api/office/inventory-operative-options'),
 
   getOfficePendingOrders: (): Promise<OfficeTask[]> =>
     get<OfficeTask[]>('/api/office/pending-orders'),

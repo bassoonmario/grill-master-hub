@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Tabs, Spinner, EmptyState, SectionTitle, PriorityBadge } from '@/components/UI'
-import { api, OfficeTask, OfficeStockRow } from '@/lib/api'
+import { api, OfficeTask, OfficeStockRow, InventoryOperativeOption } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import { ClipboardList, Send, AlertCircle, CheckCircle2, ClipboardCheck, Truck, User } from 'lucide-react'
-import type { AssigneeRole, TaskPriority } from '@/lib/api'
+import { ClipboardList, Send, AlertCircle, CheckCircle2, ClipboardCheck, Check, Truck, User } from 'lucide-react'
+import type { AssigneeRole, TaskPriority, OfficeTaskVariant } from '@/lib/api'
 import { OfficeGrillsView } from './OfficeGrillsTab'
 import { OfficePickupTab } from './OfficePickupTab'
 
@@ -57,17 +57,49 @@ function CreateTaskTab() {
   const [comment, setComment] = useState('')
   const [assigneeRole, setAssigneeRole] = useState<AssigneeRole>('driver')
   const [priority, setPriority] = useState<TaskPriority>('none')
+  const [taskVariant, setTaskVariant] = useState<OfficeTaskVariant>('receive')
+  const [componentRef, setComponentRef] = useState('')
+  const [qtyText, setQtyText] = useState('')
+  const [dueDate, setDueDate] = useState('')
+  const [options, setOptions] = useState<InventoryOperativeOption[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  const isMasterSimple = assigneeRole === 'master' && taskVariant === 'simple'
+
+  useEffect(() => {
+    if (assigneeRole !== 'master' || options.length > 0) return
+    api.getOfficeInventoryOperativeOptions().then(setOptions).catch(() => {})
+  }, [assigneeRole, options.length])
+
   const submit = async () => {
-    if (!comment.trim()) { setError('Введіть текст завдання'); return }
+    if (isMasterSimple) {
+      if (!componentRef) { setError('Оберіть компонент зі списку'); return }
+    } else if (!comment.trim()) {
+      setError('Введіть текст завдання'); return
+    }
     setSaving(true); setError(null); setSuccess(null)
     try {
-      await api.createOfficeTask(comment.trim(), user?.name, assigneeRole, priority)
+      const selectedLabel = options.find(o => o.item_id === componentRef)?.label ?? componentRef
+      const finalComment = isMasterSimple
+        ? `${selectedLabel}${qtyText.trim() ? ` — ${qtyText.trim()}` : ''}`
+        : comment.trim()
+      await api.createOfficeTask(
+        finalComment,
+        user?.name,
+        assigneeRole,
+        priority,
+        isMasterSimple ? 'simple' : 'receive',
+        (isMasterSimple || assigneeRole === 'driver') && dueDate ? dueDate : undefined,
+        isMasterSimple ? componentRef : undefined,
+      )
       setComment('')
+      setComponentRef('')
+      setQtyText('')
+      setDueDate('')
       setAssigneeRole('driver')
+      setTaskVariant('receive')
       setPriority('none')
       setSuccess(assigneeRole === 'master' ? 'Завдання створено і надіслано майстру' : 'Завдання створено і надіслано водію')
     } catch (e) {
@@ -120,6 +152,34 @@ function CreateTaskTab() {
         </div>
       </div>
 
+      {assigneeRole === 'master' && (
+        <div>
+          <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Тип завдання</label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setTaskVariant('receive')}
+              className={`flex-1 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider transition-all border ${
+                taskVariant === 'receive'
+                  ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40'
+                  : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'
+              }`}
+            >
+              Отримання
+            </button>
+            <button
+              onClick={() => setTaskVariant('simple')}
+              className={`flex-1 py-2.5 rounded-xl font-mono text-xs uppercase tracking-wider transition-all border ${
+                taskVariant === 'simple'
+                  ? 'bg-[#c9963a]/15 text-[#c9963a] border-[#c9963a]/40'
+                  : 'bg-[#121212] text-white/40 border-white/10 hover:border-white/20'
+              }`}
+            >
+              Просте
+            </button>
+          </div>
+        </div>
+      )}
+
       <div>
         <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-2">Пріоритет</label>
         <div className="flex gap-2">
@@ -140,18 +200,70 @@ function CreateTaskTab() {
         </div>
       </div>
 
-      <div>
-        <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">
-          Текст завдання для {assigneeRole === 'master' ? 'майстра' : 'водія'}
-        </label>
-        <textarea
-          value={comment}
-          onChange={e => setComment(e.target.value)}
-          rows={5}
-          placeholder="Наприклад: привезти в офіс 2 G12, 1 G8H..."
-          className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors resize-none"
-        />
-      </div>
+      {isMasterSimple ? (
+        <div className="space-y-4">
+          <div>
+            <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Компонент</label>
+            <select
+              value={componentRef}
+              onChange={e => setComponentRef(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+            >
+              <option value="">Оберіть компонент...</option>
+              {options.map(o => (
+                <option key={o.item_id} value={o.item_id}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Кількість</label>
+            <input
+              type="text"
+              value={qtyText}
+              onChange={e => setQtyText(e.target.value)}
+              placeholder="Наприклад: 20 шт"
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">Термін (опційно)</label>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={e => setDueDate(e.target.value)}
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors"
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="flex gap-3 items-start">
+          <div className="flex-1">
+            <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">
+              Текст завдання для {assigneeRole === 'master' ? 'майстра' : 'водія'}
+            </label>
+            <textarea
+              value={comment}
+              onChange={e => setComment(e.target.value)}
+              rows={5}
+              placeholder="Наприклад: привезти в офіс 2 G12, 1 G8H..."
+              className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-sm outline-none focus:border-[#c9963a]/50 transition-colors resize-none"
+            />
+          </div>
+          {assigneeRole === 'driver' && (
+            <div className="w-36 flex-shrink-0">
+              <label className="text-[10px] font-mono text-white/30 uppercase tracking-widest block mb-1.5">
+                Виконати до
+              </label>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={e => setDueDate(e.target.value)}
+                className="w-full bg-[#0a0a0a] border border-white/10 rounded-lg p-3 text-white font-mono text-xs outline-none focus:border-[#c9963a]/50 transition-colors"
+              />
+            </div>
+          )}
+        </div>
+      )}
       <button
         onClick={submit}
         disabled={saving}
@@ -235,6 +347,7 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
   onClose: () => void
   onDone: () => void
 }) {
+  const isSimpleVariant = task.assignee_role === 'master' && !!task.component_ref
   const canConfirm = task.assignee_role === 'master' && task.status !== 'архів'
   const [items, setItems] = useState<{ item_id: string; qty: string }[]>([{ item_id: '', qty: '' }])
   const [saving, setSaving] = useState(false)
@@ -260,6 +373,18 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
     }
   }
 
+  const submitSimple = async () => {
+    setSaving(true); setErr(null)
+    try {
+      await api.completeSimpleTask(task.id)
+      onDone()
+    } catch (e: any) {
+      setErr(e.message ?? 'Помилка збереження')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="bg-[#121212] border border-white/10 rounded-xl p-4 space-y-2">
       <div className="flex items-center gap-2">
@@ -271,9 +396,20 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
       <p className="text-white font-mono text-sm break-words">{task.admin_comment}</p>
       <div className="flex items-center justify-between">
         <span className="text-[9px] font-mono text-white/30 uppercase">{task.status}</span>
-        <span className="text-[9px] font-mono text-white/20">{task.created_at}</span>
+        <span className="text-[9px] font-mono text-white/20">{task.due_date ? `до ${task.due_date}` : task.created_at}</span>
       </div>
-      {canConfirm && !isConfirming && (
+      {err && <div className="text-red-400 font-mono text-[11px]">{err}</div>}
+      {canConfirm && isSimpleVariant && (
+        <button
+          onClick={submitSimple}
+          disabled={saving}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border font-mono text-[11px] uppercase tracking-wider disabled:opacity-50"
+          style={{ borderColor: 'var(--green)', color: 'var(--green)', background: 'var(--green-dim)' }}
+        >
+          <Check className="w-4 h-4" /> {saving ? 'Збереження...' : 'Підтвердити'}
+        </button>
+      )}
+      {canConfirm && !isSimpleVariant && !isConfirming && (
         <button
           onClick={onConfirmClick}
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border font-mono text-[11px] uppercase tracking-wider"
@@ -282,9 +418,8 @@ function OfficeTaskCard({ task, onConfirmClick, isConfirming, onClose, onDone }:
           <ClipboardCheck className="w-4 h-4" /> Підтвердити отримання
         </button>
       )}
-      {canConfirm && isConfirming && (
+      {canConfirm && !isSimpleVariant && isConfirming && (
         <div className="space-y-2 pt-2 border-t border-white/5">
-          {err && <div className="text-red-400 font-mono text-[11px]">{err}</div>}
           {items.map((row, i) => (
             <div key={i} className="flex gap-2">
               <input
