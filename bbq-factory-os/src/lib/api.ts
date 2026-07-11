@@ -714,6 +714,9 @@ export const api = {
   getOfficePendingOrders: (): Promise<OfficeTask[]> =>
     get<OfficeTask[]>('/api/office/pending-orders'),
 
+  getAdminDriverTasks: (): Promise<IncomingTask[]> =>
+    get<IncomingTask[]>('/api/office/admin-driver-tasks'),
+
   getMasterOfficeOrders: (): Promise<MasterOfficeOrder[]> =>
     get<MasterOfficeOrder[]>('/api/master/office-orders'),
 

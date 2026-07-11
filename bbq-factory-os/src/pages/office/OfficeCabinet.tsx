@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Tabs, Spinner, EmptyState, SectionTitle, PriorityBadge } from '@/components/UI'
-import { api, OfficeTask, OfficeStockRow, InventoryOperativeOption } from '@/lib/api'
+import { api, OfficeTask, OfficeStockRow, InventoryOperativeOption, IncomingTask } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 import { ClipboardList, Send, AlertCircle, CheckCircle2, ClipboardCheck, Check, Truck, User } from 'lucide-react'
 import type { AssigneeRole, TaskPriority, OfficeTaskVariant } from '@/lib/api'
@@ -279,6 +279,7 @@ function CreateTaskTab() {
 
 function TasksTab() {
   const [tasks, setTasks] = useState<OfficeTask[]>([])
+  const [adminDriverTasks, setAdminDriverTasks] = useState<IncomingTask[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
@@ -286,8 +287,12 @@ function TasksTab() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api.getOfficeTasks()
+      const [data, adminTasks] = await Promise.all([
+        api.getOfficeTasks(),
+        api.getAdminDriverTasks(),
+      ])
       setTasks(data)
+      setAdminDriverTasks(adminTasks)
     } catch (e) {
       setError('Не вдалося завантажити таски')
     } finally {
@@ -330,6 +335,29 @@ function TasksTab() {
                   </div>
                   <p className="text-white/50 font-mono text-xs line-through decoration-white/30">{t.admin_comment}</p>
                   <span className="text-[9px] font-mono text-white/15">{t.created_at}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {adminDriverTasks.length > 0 && (
+            <div className="pt-4">
+              <div className="text-[10px] font-mono text-white/20 uppercase tracking-widest mb-2">Завдання водію від адміна (перегляд)</div>
+              {adminDriverTasks.map(t => (
+                <div key={t.id} className="bg-[#121212] border border-white/5 rounded-xl p-4 space-y-1.5 mb-2">
+                  <div className="flex items-center gap-2">
+                    <PriorityBadge priority={t.priority} />
+                    <span className="text-[9px] font-mono text-white/30 uppercase">{t.status}</span>
+                  </div>
+                  <p className="text-white font-mono text-sm break-words">
+                    {t.item_id || t.admin_comment || `Завдання #${t.id}`}
+                  </p>
+                  {t.target_qty > 0 && (
+                    <p className="text-white/40 font-mono text-xs">{t.actual_qty ?? 0} / {t.target_qty} шт</p>
+                  )}
+                  {t.driver_comment && (
+                    <p className="text-white/30 font-mono text-[11px]">Коментар водія: {t.driver_comment}</p>
+                  )}
+                  <span className="text-[9px] font-mono text-white/20 block">{t.created_at}</span>
                 </div>
               ))}
             </div>

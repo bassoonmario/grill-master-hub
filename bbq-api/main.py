@@ -1256,7 +1256,7 @@ async def get_incoming_tasks(status_filter: Optional[str] = None):
                        to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at,
                        driver_comment, admin_comment, is_simple, priority, assignee_role
                 FROM bot_workshop.incoming_tasks
-                WHERE status = $1
+                WHERE status = $1 AND source_role = 'admin'
                 ORDER BY created_at DESC
             """, status_filter)
         else:
@@ -1266,10 +1266,11 @@ async def get_incoming_tasks(status_filter: Optional[str] = None):
                        to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at,
                        driver_comment, admin_comment, is_simple, priority, assignee_role
                 FROM bot_workshop.incoming_tasks
+                WHERE source_role = 'admin'
                 ORDER BY CASE status
-                    WHEN 'очікується' THEN 1 
-                    WHEN 'в роботі' THEN 2 
-                    ELSE 3 
+                    WHEN 'очікується' THEN 1
+                    WHEN 'в роботі' THEN 2
+                    ELSE 3
                 END, created_at DESC
             """)
         return [dict(r) for r in rows]
@@ -1335,6 +1336,30 @@ async def get_office_tasks():
         return [dict(r) for r in rows]
     except Exception as e:
         print(f"Error in GET /api/office/tasks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/office/admin-driver-tasks")
+async def get_office_admin_driver_tasks():
+    # Read-only перегляд для офісу: таски водію, створені адміном
+    # (не office/tasks — це окрема, ізольована черга).
+    p = await get_pool()
+    try:
+        rows = await p.fetch("""
+            SELECT id, item_id, target_qty, actual_qty, status,
+                   to_char(created_at, 'DD.MM.YY HH24:MI') AS created_at,
+                   to_char(completed_at, 'DD.MM.YY HH24:MI') AS completed_at,
+                   driver_comment, admin_comment, is_simple, priority, assignee_role
+            FROM bot_workshop.incoming_tasks
+            WHERE source_role = 'admin' AND assignee_role = 'driver'
+            ORDER BY CASE status
+                WHEN 'очікується' THEN 1
+                WHEN 'в роботі' THEN 2
+                ELSE 3
+            END, created_at DESC
+        """)
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"Error in GET /api/office/admin-driver-tasks: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/office/inventory-operative-options")
