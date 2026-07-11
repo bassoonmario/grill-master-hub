@@ -195,6 +195,12 @@ export interface Defect {
   reason: string
   defect_date: string
   status: string
+  order_key: string | null
+  source: string
+  qty: number
+  accepted_by: string | null
+  accepted_at: string | null
+  resolution: string | null
 }
 
 export interface GlobalStat {
@@ -531,6 +537,18 @@ export const api = {
 
   getDefects: (): Promise<Defect[]> =>
     get<Defect[]>('/api/master/defects'),
+
+  addManualDefect: (item_id: string, qty: number, reason: string, master_name: string) =>
+    post<{ status: string; id: number }>('/api/master/defects/manual', { item_id, qty, reason, master_name }),
+
+  acceptDefect: (id: number, master_name: string) =>
+    post<{ status: string; id: number }>(`/api/master/defects/${id}/accept`, { master_name }),
+
+  fixDefect: (id: number, master_name: string, reason?: string) =>
+    post<{ status: string }>(`/api/master/defects/${id}/fix`, { master_name, reason }),
+
+  writeoffDefect: (id: number, master_name: string, reason?: string) =>
+    post<{ status: string }>(`/api/master/defects/${id}/writeoff`, { master_name, reason }),
 
   getMasterWholesale: (): Promise<MasterWholesaleItem[]> =>
     get<MasterWholesaleItem[]>('/api/master/wholesale'),

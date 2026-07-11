@@ -233,6 +233,19 @@ class OfficeStockReceiveBody(BaseModel):
     task_id: int
     items: List[OfficeStockReceiveItem]
 
+class DefectManualCreate(BaseModel):
+    item_id: str
+    qty: int
+    reason: str
+    master_name: str
+
+class DefectAcceptBody(BaseModel):
+    master_name: str
+
+class DefectResolveBody(BaseModel):
+    master_name: str
+    reason: Optional[str] = None
+
 @app.get("/api/auth/users", response_model=List[UserOut])
 async def get_users():
     p = await get_pool()
@@ -779,6 +792,125 @@ async def get_defects():
     try:
         rows = await p.fetch("SELECT * FROM bot_workshop.defects ORDER BY defect_date DESC LIMIT 50")
         return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/defects/manual")
+async def add_manual_defect(body: DefectManualCreate):
+    if body.qty <= 0:
+        raise HTTPException(status_code=400, detail="Кількість має бути більшою за нуль")
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                stock = await conn.fetchrow(
+                    "SELECT quantity FROM bot_workshop.inventory_operative WHERE item_id = $1",
+                    body.item_id
+                )
+                if stock is None:
+                    raise HTTPException(status_code=404, detail="Компонент не знайдено")
+                if body.qty > stock["quantity"]:
+                    raise HTTPException(status_code=400, detail=f"Перевищує наявність на складі ({stock['quantity']})")
+
+                await conn.execute("""
+                    UPDATE bot_workshop.inventory_operative SET quantity = quantity - $1 WHERE item_id = $2
+                """, body.qty, body.item_id)
+
+                defect_row = await conn.fetchrow("""
+                    INSERT INTO bot_workshop.defects
+                        (sku, item_type, reason, defect_date, status, source, qty, accepted_by, accepted_at)
+                    VALUES ($1, 'component', $2, CURRENT_DATE, 'in_progress', 'manual', $3, $4, NOW())
+                    RETURNING id
+                """, body.item_id, body.reason, body.qty, body.master_name)
+
+                await conn.execute("""
+                    INSERT INTO bot_workshop.history_logs (article, component, qty, source, operation)
+                    VALUES ($1, $1, $2, 'inventory_operative', 'defect_manual_add')
+                """, body.item_id, -body.qty)
+
+                return {"status": "ok", "id": defect_row["id"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/defects/{defect_id}/accept")
+async def accept_defect(defect_id: int, body: DefectAcceptBody):
+    p = await get_pool()
+    try:
+        row = await p.fetchrow("""
+            UPDATE bot_workshop.defects
+            SET accepted_by = $1, accepted_at = NOW(), status = 'in_progress'
+            WHERE id = $2 AND status = 'new' AND source = 'crm_return'
+            RETURNING id
+        """, body.master_name, defect_id)
+        if not row:
+            raise HTTPException(status_code=409, detail="Вже прийнято іншим майстром або не підлягає прийняттю")
+        return {"status": "ok", "id": row["id"]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/defects/{defect_id}/fix")
+async def fix_defect(defect_id: int, body: DefectResolveBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                defect = await conn.fetchrow("""
+                    UPDATE bot_workshop.defects
+                    SET status = 'fixed', resolution = 'fixed', reason = COALESCE($1, reason)
+                    WHERE id = $2 AND status = 'in_progress' AND accepted_by = $3
+                    RETURNING sku, item_type, qty
+                """, body.reason, defect_id, body.master_name)
+                if not defect:
+                    raise HTTPException(status_code=409, detail="Дефект не в роботі або прийнятий іншим майстром")
+
+                # item_type='finished' повертає готовий виріб, 'component' — комплектуху
+                target_table = "bot_workshop.inventory_finished" if defect["item_type"] == "finished" else "bot_workshop.inventory_operative"
+                await conn.execute(f"""
+                    UPDATE {target_table} SET quantity = quantity + $1 WHERE item_id = $2
+                """, defect["qty"], defect["sku"])
+
+                source = "inventory_finished" if defect["item_type"] == "finished" else "inventory_operative"
+                await conn.execute("""
+                    INSERT INTO bot_workshop.history_logs (article, component, qty, source, operation)
+                    VALUES ($1, $1, $2, $3, 'defect_fixed')
+                """, defect["sku"], defect["qty"], source)
+
+                return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/master/defects/{defect_id}/writeoff")
+async def writeoff_defect(defect_id: int, body: DefectResolveBody):
+    p = await get_pool()
+    try:
+        async with p.acquire() as conn:
+            async with conn.transaction():
+                # Жодних складських рухів: для crm_return/finished їх і не
+                # було, для manual/component qty вже відняли при заведенні.
+                # Це інформаційний запис аудиту.
+                defect = await conn.fetchrow("""
+                    UPDATE bot_workshop.defects
+                    SET status = 'written_off', resolution = 'written_off', reason = COALESCE($1, reason)
+                    WHERE id = $2 AND status = 'in_progress' AND accepted_by = $3 AND item_type = 'component'
+                    RETURNING sku, qty
+                """, body.reason, defect_id, body.master_name)
+                if not defect:
+                    raise HTTPException(status_code=409, detail="Дефект не в роботі, прийнятий іншим майстром, або списання недоступне для готових виробів")
+
+                await conn.execute("""
+                    INSERT INTO bot_workshop.history_logs (article, component, qty, source, operation)
+                    VALUES ($1, $1, $2, 'defects', 'defect_writeoff')
+                """, defect["sku"], -defect["qty"])
+
+                return {"status": "ok"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
-import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem, MasterOfficeOrder, OfficeStockAlert } from '@/lib/api'
+import { api, MasterDashboard, MasterLog, Shipment, Defect, ReplenishAlert, MasterWholesaleItem, MasterOfficeOrder, OfficeStockAlert, InventoryOperativeOption } from '@/lib/api'
 import { SectionTitle, StatCard, Spinner, Card, Tabs, PriorityBadge, EmptyState } from '@/components/UI'
 import { ShipmentsLog } from '@/components/ShipmentsLog'
 import { Plus, Minus, Trash2, Pencil, Check, ChevronDown, ChevronUp, RefreshCw, Ruler, Truck, ShieldCheck, Wine, Target, DollarSign, AlertTriangle, PackagePlus, ClipboardList, MessageSquare, Store } from 'lucide-react'
@@ -33,6 +33,11 @@ export function MasterCabinet() {
   const [wholesaleItems, setWholesaleItems] = useState<MasterWholesaleItem[]>([])
   const [shipmentsSubTab, setShipmentsSubTab] = useState<'log' | 'wholesale'>('log')
   const [defects, setDefects] = useState<Defect[]>([])
+  const [defectOptions, setDefectOptions] = useState<InventoryOperativeOption[]>([])
+  const [isAddingDefect, setIsAddingDefect] = useState(false)
+  const [newDefect, setNewDefect] = useState({ item_id: '', qty: 1, reason: '' })
+  const [defectReasons, setDefectReasons] = useState<Record<number, string>>({})
+  const [defectActionLoading, setDefectActionLoading] = useState<Record<number, boolean>>({})
   const [loading, setLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
   const [isAdding, setIsAdding] = useState(false)
@@ -232,6 +237,61 @@ export function MasterCabinet() {
     } catch { }
   }, [])
 
+  const handleAddDefect = async () => {
+    if (!user || !newDefect.item_id || !newDefect.reason.trim() || newDefect.qty <= 0) return
+    setIsSyncing(true)
+    try {
+      await api.addManualDefect(newDefect.item_id, newDefect.qty, newDefect.reason.trim(), user.name)
+      setIsAddingDefect(false)
+      setNewDefect({ item_id: '', qty: 1, reason: '' })
+      await loadData()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Помилка додавання браку')
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  const handleAcceptDefect = async (id: number) => {
+    if (!user) return
+    setDefectActionLoading(prev => ({ ...prev, [id]: true }))
+    try {
+      await api.acceptDefect(id, user.name)
+      await loadData()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Помилка прийняття браку')
+    } finally {
+      setDefectActionLoading(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
+  const handleFixDefect = async (id: number) => {
+    if (!user) return
+    setDefectActionLoading(prev => ({ ...prev, [id]: true }))
+    try {
+      await api.fixDefect(id, user.name, defectReasons[id]?.trim() || undefined)
+      await loadData()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Помилка')
+    } finally {
+      setDefectActionLoading(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
+  const handleWriteoffDefect = async (id: number) => {
+    if (!user) return
+    if (!confirm('Списати брак остаточно?')) return
+    setDefectActionLoading(prev => ({ ...prev, [id]: true }))
+    try {
+      await api.writeoffDefect(id, user.name, defectReasons[id]?.trim() || undefined)
+      await loadData()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Помилка')
+    } finally {
+      setDefectActionLoading(prev => ({ ...prev, [id]: false }))
+    }
+  }
+
   useEffect(() => {
     if (tab !== 'notifications') return
     loadOfficeOrders()
@@ -244,6 +304,11 @@ export function MasterCabinet() {
       window.removeEventListener('focus', onFocus)
     }
   }, [tab, loadOfficeOrders, loadOfficeStockAlerts])
+
+  useEffect(() => {
+    if (tab !== 'defects' || defectOptions.length > 0) return
+    api.getOfficeInventoryOperativeOptions().then(setDefectOptions).catch(() => {})
+  }, [tab, defectOptions.length])
 
   const handleConfirmReplenish = async (alertId: number) => {
     setReplenishLoading(prev => ({ ...prev, [alertId]: true }))
@@ -630,20 +695,128 @@ export function MasterCabinet() {
         {/* ВКЛАДКА 4: ОБЛІК БРАКУ */}
         {tab === 'defects' && (
           <div className="space-y-3">
-            <SectionTitle>Облік бракованих деталей</SectionTitle>
+            <div className="flex justify-between items-center">
+              <SectionTitle>Облік бракованих деталей</SectionTitle>
+              <button
+                onClick={() => setIsAddingDefect(true)}
+                className="bg-white/5 border border-white/10 text-[var(--orange)] px-3 py-1 rounded-lg text-xs font-mono tracking-tighter flex items-center gap-1 active:scale-95 transition-all"
+              >
+                <Plus className="w-3 h-3" /> Додати брак
+              </button>
+            </div>
+
+            {isAddingDefect && (
+              <Card className="border-2 border-[var(--orange)] shadow-[0_0_20px_rgba(255,140,66,0.2)]">
+                <div className="p-4 bg-[#1a1a1a] space-y-4">
+                  <h4 className="text-white text-sm font-bold uppercase flex items-center gap-2">
+                    <Plus className="text-[var(--orange)] w-4 h-4" /> Новий брак комплектухи
+                  </h4>
+                  <div>
+                    <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1">Компонент</label>
+                    <select
+                      value={newDefect.item_id}
+                      onChange={e => setNewDefect({ ...newDefect, item_id: e.target.value })}
+                      className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-[var(--orange)]"
+                    >
+                      <option value="">Оберіть компонент...</option>
+                      {defectOptions.map(o => (
+                        <option key={o.item_id} value={o.item_id}>{o.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1">Кількість</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={newDefect.qty}
+                      onChange={e => setNewDefect({ ...newDefect, qty: parseInt(e.target.value) || 0 })}
+                      className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-center font-display text-xl outline-none focus:border-[var(--orange)]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-500 uppercase font-mono mb-1">Причина</label>
+                    <textarea
+                      value={newDefect.reason}
+                      onChange={e => setNewDefect({ ...newDefect, reason: e.target.value })}
+                      rows={2}
+                      className="w-full bg-black border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-[var(--orange)]"
+                    />
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button onClick={() => setIsAddingDefect(false)} className="flex-1 py-3 rounded-xl border border-white/10 text-gray-400 text-xs font-bold uppercase">Скасувати</button>
+                    <button
+                      onClick={handleAddDefect}
+                      disabled={!newDefect.item_id || !newDefect.reason.trim() || newDefect.qty <= 0 || isSyncing}
+                      className="flex-[2] py-3 rounded-xl bg-[var(--orange)] text-black text-xs font-black uppercase shadow-lg disabled:opacity-30 transition-all flex items-center justify-center gap-2"
+                    >
+                      {isSyncing ? <Spinner /> : <Plus className="w-4 h-4" />} Додати
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            )}
+
             {defects.length === 0 ? (
               <p className="text-xs text-[var(--text-dim)] font-mono text-center py-8">Записів про брак не знайдено</p>
             ) : (
-              defects.map(d => (
-                <div key={d.id} className="bg-white/5 border border-white/10 backdrop-blur-sm p-4 rounded-xl">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white font-bold uppercase tracking-tight">{d.sku}</span>
-                    <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded uppercase ${d.status === 'fixed' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}`}>{d.status === 'fixed' ? 'Виправлено' : 'Брак'}</span>
+              defects.map(d => {
+                const statusLabel = d.status === 'fixed' ? 'Виправлено' : d.status === 'written_off' ? 'Списано' : d.status === 'in_progress' ? 'У роботі' : 'Новий'
+                const statusColor = d.status === 'fixed' ? 'bg-green-900/30 text-green-400' : d.status === 'written_off' ? 'bg-gray-700/30 text-gray-400' : d.status === 'in_progress' ? 'bg-yellow-900/30 text-yellow-400' : 'bg-red-900/30 text-red-400'
+                const isLoading = !!defectActionLoading[d.id]
+                return (
+                  <div key={d.id} className="bg-white/5 border border-white/10 backdrop-blur-sm p-4 rounded-xl">
+                    <div className="flex justify-between items-center">
+                      <span className="text-white font-bold uppercase tracking-tight">{d.sku}</span>
+                      <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded uppercase ${statusColor}`}>{statusLabel}</span>
+                    </div>
+                    <p className="text-xs text-gray-300 mt-2">{d.reason}</p>
+                    <p className="text-[10px] text-gray-500 font-mono mt-1">
+                      {new Date(d.defect_date).toLocaleDateString()} · {d.qty} шт · {d.item_type === 'finished' ? 'готовий виріб' : 'комплектуха'}
+                    </p>
+
+                    {d.status === 'new' && d.source === 'crm_return' && (
+                      <button
+                        onClick={() => handleAcceptDefect(d.id)}
+                        disabled={isLoading}
+                        className="w-full mt-3 py-2 rounded-lg bg-[var(--orange)] text-black text-xs font-black uppercase disabled:opacity-30"
+                      >
+                        {isLoading ? '...' : 'Прийняти'}
+                      </button>
+                    )}
+
+                    {d.status === 'in_progress' && (
+                      <div className="mt-3 space-y-2">
+                        <textarea
+                          value={defectReasons[d.id] ?? ''}
+                          onChange={e => setDefectReasons(prev => ({ ...prev, [d.id]: e.target.value }))}
+                          placeholder="Причина (необов'язково)"
+                          rows={2}
+                          className="w-full bg-black border border-white/10 rounded-lg p-2 text-white text-xs outline-none focus:border-[var(--orange)]"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleFixDefect(d.id)}
+                            disabled={isLoading}
+                            className="flex-1 py-2 rounded-lg border border-green-500/40 text-green-400 text-xs font-bold uppercase disabled:opacity-30"
+                          >
+                            Виправлено
+                          </button>
+                          {d.item_type === 'component' && (
+                            <button
+                              onClick={() => handleWriteoffDefect(d.id)}
+                              disabled={isLoading}
+                              className="flex-1 py-2 rounded-lg border border-red-500/40 text-red-400 text-xs font-bold uppercase disabled:opacity-30"
+                            >
+                              Списати
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-xs text-gray-300 mt-2">{d.reason}</p>
-                  <p className="text-[10px] text-gray-500 font-mono mt-1">{new Date(d.defect_date).toLocaleDateString()}</p>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         )}
