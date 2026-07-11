@@ -217,7 +217,7 @@ class OfficeTaskCreate(BaseModel):
     assignee_role: Literal['driver', 'master'] = 'driver'
     priority: Literal['none', 'low', 'medium', 'high'] = 'none'
     task_variant: Literal['receive', 'simple'] = 'receive'
-    due_date: Optional[str] = None
+    due_date: Optional[date] = None
     component_ref: Optional[str] = None
 
 class OfficeStockUpdate(BaseModel):
