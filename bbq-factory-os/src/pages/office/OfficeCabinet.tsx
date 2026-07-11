@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { Tabs, Spinner, EmptyState, SectionTitle, PriorityBadge } from '@/components/UI'
 import { api, OfficeTask, OfficeStockRow } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import { Plus, ClipboardList, Store, Package, Send, AlertCircle, CheckCircle2, ClipboardCheck, Truck, User } from 'lucide-react'
+import { ClipboardList, Send, AlertCircle, CheckCircle2, ClipboardCheck, Truck, User } from 'lucide-react'
 import type { AssigneeRole, TaskPriority } from '@/lib/api'
 import { OfficeGrillsView } from './OfficeGrillsTab'
 import { OfficePickupTab } from './OfficePickupTab'
@@ -11,22 +11,12 @@ import { OfficePickupTab } from './OfficePickupTab'
 type TabKey = 'create' | 'tasks' | 'shop' | 'grills'
 
 export function OfficeCabinet() {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const tab = (searchParams.get('tab') as TabKey) || 'create'
-
-  const setTab = (k: TabKey) => setSearchParams({ tab: k })
-
-  const tabs = [
-    { key: 'create', label: 'Створити', icon: <Plus className="w-4 h-4" /> },
-    { key: 'tasks',  label: 'Таски',    icon: <ClipboardList className="w-4 h-4" /> },
-    { key: 'shop',   label: 'Магазин',  icon: <Store className="w-4 h-4" /> },
-    { key: 'grills', label: 'Грилі',    icon: <Package className="w-4 h-4" /> },
-  ]
 
   return (
     <div className="space-y-6 pb-20">
       <SectionTitle>Кабінет офісу</SectionTitle>
-      <Tabs tabs={tabs} active={tab} onChange={k => setTab(k as TabKey)} variant="underline" />
 
       {tab === 'create' && <CreateTaskTab />}
       {tab === 'tasks'  && <TasksTab />}
