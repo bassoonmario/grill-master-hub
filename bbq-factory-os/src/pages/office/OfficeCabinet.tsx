@@ -325,6 +325,25 @@ function TasksTab() {
               onDone={() => { setConfirmingId(null); load() }}
             />
           ))}
+          {adminDriverTasks.map(t => (
+            <div key={`admin-${t.id}`} className="bg-[#121212] border border-white/5 rounded-xl p-4 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <PriorityBadge priority={t.priority} />
+                <span className="text-[9px] font-mono text-white/30 uppercase bg-white/5 px-2 py-0.5 rounded">адмін · водію</span>
+                <span className="text-[9px] font-mono text-white/30 uppercase ml-auto">{t.status}</span>
+              </div>
+              <p className="text-white font-mono text-sm break-words">
+                {t.item_id || t.admin_comment || `Завдання #${t.id}`}
+              </p>
+              {t.target_qty > 0 && (
+                <p className="text-white/40 font-mono text-xs">{t.actual_qty ?? 0} / {t.target_qty} шт</p>
+              )}
+              {t.driver_comment && (
+                <p className="text-white/30 font-mono text-[11px]">Коментар водія: {t.driver_comment}</p>
+              )}
+              <span className="text-[9px] font-mono text-white/20 block">{t.created_at}</span>
+            </div>
+          ))}
           {archived.length > 0 && (
             <div className="pt-4">
               <div className="text-[10px] font-mono text-white/20 uppercase tracking-widest mb-2">Архів</div>
@@ -335,29 +354,6 @@ function TasksTab() {
                   </div>
                   <p className="text-white/50 font-mono text-xs line-through decoration-white/30">{t.admin_comment}</p>
                   <span className="text-[9px] font-mono text-white/15">{t.created_at}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {adminDriverTasks.length > 0 && (
-            <div className="pt-4">
-              <div className="text-[10px] font-mono text-white/20 uppercase tracking-widest mb-2">Завдання водію від адміна (перегляд)</div>
-              {adminDriverTasks.map(t => (
-                <div key={t.id} className="bg-[#121212] border border-white/5 rounded-xl p-4 space-y-1.5 mb-2">
-                  <div className="flex items-center gap-2">
-                    <PriorityBadge priority={t.priority} />
-                    <span className="text-[9px] font-mono text-white/30 uppercase">{t.status}</span>
-                  </div>
-                  <p className="text-white font-mono text-sm break-words">
-                    {t.item_id || t.admin_comment || `Завдання #${t.id}`}
-                  </p>
-                  {t.target_qty > 0 && (
-                    <p className="text-white/40 font-mono text-xs">{t.actual_qty ?? 0} / {t.target_qty} шт</p>
-                  )}
-                  {t.driver_comment && (
-                    <p className="text-white/30 font-mono text-[11px]">Коментар водія: {t.driver_comment}</p>
-                  )}
-                  <span className="text-[9px] font-mono text-white/20 block">{t.created_at}</span>
                 </div>
               ))}
             </div>
